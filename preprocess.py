@@ -10,23 +10,30 @@ import re
 import nrrd
 import time
 
-# Some constants
-INPUT_FOLDER = 'raw_data'
-patients = os.listdir(INPUT_FOLDER)
-patients.sort()
-
 
 def load_scan(path):
+    """
+    Loads the ct scan, pet scans, and tumor mask
+    :param path: Folder which represents a patient
+    :return: ct, pet, tumor databases
+    """
 
+    # .dcm files are the ct scan
     ct_slices = [pydicom.read_file(path + '/' + s) for s in os.listdir(path) if re.match(r'.*\.dcm', s)]
+
+    # Files with IM_XXX and no extension are the PET scan
     pet_slices = [pydicom.read_file(path + '/' + s) for s in os.listdir(path) if re.match(r'IM_[0-9]+$', s)]
+
+    # Sort them so it's in order
     ct_slices.sort(key=lambda x: float(x.ImagePositionPatient[2]))
     pet_slices.sort(key=lambda x: float(x.ImagePositionPatient[2]))
 
+    # Find the tumor mask
     for s in os.listdir(path):
         if re.match(r'.*GTV\.nrrd', s):
             segmentation = nrrd.read(path + '/' + s)
 
+    # A bunch of ways to find the z-axis spacing RIP
     try:
         try:
             ct_slice_thickness = np.abs(ct_slices[0].ImagePositionPatient[2] - ct_slices[1].ImagePositionPatient[2])
@@ -38,6 +45,7 @@ def load_scan(path):
         ct_slice_thickness = ct_slices[0][0x18, 0x88].value
         pet_slice_thickness = pet_slices[0][0x18, 0x88].value
 
+    # Make sure they remember their z-axis spacing
     for s in ct_slices:
         s.SliceThickness = ct_slice_thickness
 
@@ -48,50 +56,114 @@ def load_scan(path):
 
 
 def get_pixels_hu(slices):
+    """
+    Gets the pixels from the database things
+    :param slices: list of databases representing a DICOM scan
+    :return: NumPy array of pixel values
+    """
     image = np.stack([s.pixel_array for s in slices])
     # Convert to int16 (from sometimes int16),
     # should be possible as values should always be low enough (<32k)
     image = image.astype(np.int16)
 
-    # Set outside-of-scan pixels to 0
-    # The intercept is usually -1024, so air is approximately 0
-    image[image == -2000] = 0
+    # --- NOT SURE IF I NEED THIS ---
+    # # Set outside-of-scan pixels to 0
+    # # The intercept is usually -1024, so air is approximately 0
+    # image[image == -2000] = 0
 
-    # Convert to Hounsfield units (HU)
+    # Convert to the numbers they should be, DICOM is stupid
     for slice_number in range(len(slices)):
 
+        # Get the intercept and slope
         intercept = slices[slice_number].RescaleIntercept
         slope = slices[slice_number].RescaleSlope
 
-        if slope != 1:
-            image[slice_number] = slope * image[slice_number].astype(np.float64)
-            image[slice_number] = image[slice_number].astype(np.int16)
+        # Change the slope
+        image[slice_number] = slope * image[slice_number].astype(np.float64)
+        image[slice_number] = image[slice_number].astype(np.int16)
 
+        # Add the intercept
         image[slice_number] += np.int16(intercept)
 
     return np.array(image, dtype=np.int16)
 
 
 def resample(image, scan, new_spacing=[1, 1, 1]):
+    """
+    This resamples the image as the new spacing in mm
+    :param image: NumPy array of pixel intensities
+    :param scan: List of databases (used to find original spacing)
+    :param new_spacing: List representing new spacing
+    :return: resampled_image, new_spacing
+    """
     # Determine current pixel spacing
     spacing = np.array([scan[0].SliceThickness, scan[0].PixelSpacing[0], scan[0].PixelSpacing[1]], dtype=np.float32)
 
+    # How much we need to scale each dimension
     resize_factor = spacing / new_spacing
+
+    # Find the new shape
     new_real_shape = image.shape * resize_factor
     new_shape = np.round(new_real_shape)
+
+    # Round the resize factor
     real_resize_factor = new_shape / image.shape
+
+    # New spacing
     new_spacing = spacing / real_resize_factor
+
+    # Actually use interpolation to create new image (fuck it takes long)
+    image = scipy.ndimage.interpolation.zoom(image, real_resize_factor, mode='nearest')
+
+    return image, new_spacing
+
+
+def resample_mask(image, space_directions, new_spacing=[1, 1, 1]):
+    """
+    This resamples the mask into a new dimension, needed a new one because these are .nrrd
+    :param image: np array image
+    :param space_directions: the spacing basically
+    :param new_spacing: duh
+    :return: resampled image
+    """
+    # Determine current pixel spacing
+    spacing = np.array([space_directions[0, 0], space_directions[1, 1], space_directions[2, 2]], dtype=np.float32)
+
+    # How much we need to scale each dimension
+    resize_factor = spacing / new_spacing
+
+    # Find the new shape
+    new_real_shape = image.shape * resize_factor
+    new_shape = np.round(new_real_shape)
+
+    # Round the resize factor
+    real_resize_factor = new_shape / image.shape
+
+    # New spacing
+    new_spacing = spacing / real_resize_factor
+
+    # Actually use interpolation to create new image (it takes long)
     image = scipy.ndimage.interpolation.zoom(image, real_resize_factor, mode='nearest')
 
     return image, new_spacing
 
 
 def largest_label_volume(im, bg=-1):
+    """
+    Finds the largest volume in a scan of the same value
+    :param im: 3D NumPy array representing image
+    :param bg: int that will be ignored as background
+    :return: largest volume label
+    """
+
+    # Finds the unique labels and the amount of times they pop up
     vals, counts = np.unique(im, return_counts=True)
 
+    # Gets rid of background counts
     counts = counts[vals != bg]
     vals = vals[vals != bg]
 
+    # If there is a large volume, return it, otherwise it's all background
     if len(counts) > 0:
         return vals[np.argmax(counts)]
     else:
@@ -99,20 +171,20 @@ def largest_label_volume(im, bg=-1):
 
 
 def segment_lung_mask(image, fill_lung_structures=True):
-    # not actually binary, but 1 and 2.
-    # 0 is treated as background, which we do not want
-    # image_index = 600
+    """
+    This returns a mask which covers the lungs
+    :param image: 3d np array
+    :param fill_lung_structures: true if you want to include hard structures inside lungs
+    :return: binary mask
+    """
+
+    # Makes all the air pixels 0, everything else 1
     binary_image = np.array(image > -320, dtype=np.int8)
 
-    # close small holes, like nose
-    binary_image = scipy.ndimage.morphology.binary_closing(binary_image, structure=np.ones([1, 10, 10])) + 1
+    # Close up sinuses so the lungs are not connected to the outside
+    binary_image = scipy.ndimage.morphology.binary_closing(binary_image, structure=np.ones([5, 5, 5])) + 1
 
-    # plt.figure()
-    # plt.imshow(binary_image[image_index], cmap=plt.cm.gray)
-    # plt.figure()
-    # plt.imshow(closed_binary_image[image_index], cmap=plt.cm.gray)
-    # plt.show()
-
+    # Turns every group of same digits into a unique number, separating air in lungs from air outside lungs
     labels = measure.label(binary_image, connectivity=1)
 
     # Pick the pixel in the very corner to determine which label is air.
@@ -127,91 +199,71 @@ def segment_lung_mask(image, fill_lung_structures=True):
     # Method of filling the lung structures (that is superior to something like
     # morphological closing)
     if fill_lung_structures:
+
         # For every slice we determine the largest solid structure
         for i, axial_slice in enumerate(binary_image):
+
+            # Make axial slices binary, 1 is air enclosed in body, 0 is body and outside air
             axial_slice = axial_slice - 1
+
+            # Label the air inside the body
             labeling = measure.label(axial_slice)
+
+            # Find the largest volume (which will be the lungs)
             l_max = largest_label_volume(labeling, bg=0)
 
-            if l_max is not None:  # This slice contains some lung
+            # If the slice contains lungs, the labels that aren't the maximum are turned to 1, which means ignored
+            if l_max is not None:
                 binary_image[i][labeling != l_max] = 1
 
-    binary_image -= 1  # Make the image actual binary
-    binary_image = 1 - binary_image  # Invert it, lungs are now 1
+    # Make the lungs 1, everything else 0
+    binary_image -= 1
+    binary_image = 1 - binary_image
 
-    # plt.figure()
-    # plt.imshow(image[image_index], cmap=plt.cm.gray)
-    # plt.figure()
-    # plt.imshow(binary_image[image_index], cmap=plt.cm.gray)
-    # plt.figure()
-    # plt.imshow(labels[image_index], cmap=plt.cm.gray)
-    # plt.show()
-
-    # Remove other air pockets insided body
+    # Remove other air pockets inside body
     labels = measure.label(binary_image, background=0)
     l_max = largest_label_volume(labels, bg=0)
-    if l_max is not None:  # There are air pockets
+    if l_max is not None:
         binary_image[labels != l_max] = 0
 
-    return binary_image
+    # Dilate the image
+    dilated = scipy.ndimage.morphology.binary_dilation(binary_image, structure=np.ones([10, 10, 10]))
+
+    return dilated
 
 
-def plot_3d(image, threshold=-300):
-    # Position the scan upright,
-    # so the head of the patient would be at the top facing the camera
-    p = image.transpose(2, 1, 0)
-
-    verts, faces = measure.marching_cubes_classic(p, threshold)
-
-    fig = plt.figure(figsize=(10, 10))
-    ax = fig.add_subplot(111, projection='3d')
-
-    # Fancy indexing: `verts[faces]` to generate a collection of triangles
-    mesh = Poly3DCollection(verts[faces], alpha=0.70)
-    face_color = [0.45, 0.45, 0.75]
-    mesh.set_facecolor(face_color)
-    ax.add_collection3d(mesh)
-
-    ax.set_xlim(0, p.shape[0])
-    ax.set_ylim(0, p.shape[1])
-    ax.set_zlim(0, p.shape[2])
-
-    plt.show()
-
-
-MIN_BOUND = -1000.0
-MAX_BOUND = 400.0
-
-
-def normalize(image):
-    image = (image - MIN_BOUND) / (MAX_BOUND - MIN_BOUND)
+def normalize(image, min_bound=-1000.0, max_bound=400.0):
+    """
+    This normalizes the pixels between 0.0 and 1.0, where there is a min and max bound which cuts it off. This is
+    useful for getting rid of bones in CT scans essentially.
+    :param image: 3d np array
+    :param min_bound: minimum value
+    :param max_bound: maximum value
+    :return: normalized image
+    """
+    image = (image - min_bound) / (max_bound - min_bound)
     image[image > 1] = 1.
     image[image < 0] = 0.
     return image
 
 
-PIXEL_MEAN = 0.25
-
-
-def zero_center(image):
-    image = image - PIXEL_MEAN
+def zero_center(image, pixel_mean=0.25):
+    """
+    This is to center the data mean around 0. This just helps
+    :param image: image array
+    :param pixel_mean: the mean
+    :return: centered array
+    """
+    image = image - pixel_mean
     return image
 
 
-def resample_mask(image, space_directions, new_spacing=[1, 1, 1]):
-    # Determine current pixel spacing
-    spacing = np.array([space_directions[0, 0], space_directions[1, 1], space_directions[2, 2]], dtype=np.float32)
-    resize_factor = spacing / new_spacing
-    new_real_shape = image.shape * resize_factor
-    new_shape = np.round(new_real_shape)
-    real_resize_factor = new_shape / image.shape
-    new_spacing = spacing / real_resize_factor
-    image = scipy.ndimage.interpolation.zoom(image, real_resize_factor, mode='nearest')
-
-    return image, new_spacing
-
-
 def load_image(path):
+    """
+    This takes a patient folder and loads the CT, PET, tumor mask, and lung segmentation, all resampled to [1,1,1]
+    :param path: duh
+    :return: above
+    """
 
     # Loading the data
     print('Loading data...')
@@ -232,23 +284,17 @@ def load_image(path):
 
     # Get the lung mask
     print('Generating lung mask...')
-    lung_mask = get_lung_mask(ct_resampled_image)
+    lung_mask = segment_lung_mask(ct_resampled_image, True)
 
     return ct_resampled_image, pet_resampled_image, tumor_resampled_mask, lung_mask
 
 
-def get_lung_mask(image):
-
-    # Get the segmentation
-    segmented_lungs_fill = segment_lung_mask(image, True)
-
-    # Dilate the mask
-    dilated_mask = scipy.ndimage.morphology.binary_dilation(segmented_lungs_fill, structure=np.ones([10, 10, 10]))
-
-    return dilated_mask
-
-
 def display_ct_pet(folder):
+    """
+    This displaces the ct, pet, tumor mask, and lung mask in 2d axial view of the tumor
+    :param folder: the folder in which all these scans, saved as np arrays, are located
+    :return: none
+    """
 
     # Load the scans
     ct = np.load(folder + '/CT.npy')
@@ -277,9 +323,17 @@ def display_ct_pet(folder):
     plt.show()
 
 
-def process_data():
+def process_data(parent_directory):
+    """
+    This takes a parent directory and processes all the patients, as folders, within it
+    :param parent_directory:
+    :return: none
+    """
     # Start timer
     start_time = time.time()
+
+    # Get the list of folders in patients
+    patients = sorted(os.listdir(parent_directory))
 
     # Loop through every patient
     for patient in patients:
@@ -289,7 +343,7 @@ def process_data():
         start_time1 = time.time()
 
         # Load the image of the given patient
-        ct, pet, mask, lung = load_image(INPUT_FOLDER + "/" + patient)
+        ct, pet, mask, lung = load_image(parent_directory + "/" + patient)
 
         # Create a directory if it doesn't exist
         if not os.path.exists('processed_data/' + patient):
@@ -307,48 +361,19 @@ def process_data():
     # Print time
     print("--- Total time elapsed: %s seconds ---" % (time.time() - start_time))
 
+
 def main():
 
-    # process_data()
-    display_ct_pet('processed_data/Lung-CHOP-001')
+    # Lung segmentation stuff
+    temp_image = np.load('processed_data/Lung-VA-001/CT.npy')
+    temp_segmentation = segment_lung_mask(temp_image, True)
+    np.save('processed_data/Lung-VA-001/lung.npy', temp_segmentation)
 
-    # print('Creating mask...')
-    # lung_mask = get_lung_mask(loaded_image)
-    # print('Completed creating mask')
-    #
-    # np.save('DL_test/test_segment.npy', lung_mask)
-    #
-    # print('Plotting mask...')
-    # plt.imshow(lung_mask[0], cmap=plt.cm.gray)
-    # plt.show()
+    # Processes all patients folders within the given directory
+    # process_data('raw_data')
 
-    # display_ct_pet('processed_data/20100506/CT.npy', 'processed_data/20100506/PET.npy', 600)
-    #
-
-
-
-
-
-
-    # first_patient = load_scan(INPUT_FOLDER + "/" + patients[0])
-    # first_patient_pixels = get_pixels_hu(first_patient)
-    # segmented_lungs_fill = np.load('DL_test/segmented_lungs_fill.npy')
-    # segmented_lungs = np.load('DL_test/segmented_lungs.npy')
-
-    # pix_resampled, spacing = resample(first_patient_pixels, first_patient, [1, 1, 1])
-    # print("Shape before resampling\t", first_patient_pixels.shape)
-    # print("Shape after resampling\t", pix_resampled.shape)
-    # np.save('DL_test', pix_resampled)
-    # print('saved')
-
-    # segmented_lungs = segment_lung_mask(pix_resampled[:800], False)
-    # segmented_lungs_fill = segment_lung_mask(pix_resampled[:800], True)
-    # np.save('DL_test/segmented_lungs', segmented_lungs)
-    # np.save('DL_test/segmented_lungs_fill', segmented_lungs_fill)
-
-    # plot_3d(segmented_lungs_fill, 0)
-
-
+    # Display the data in the given folder
+    display_ct_pet('processed_data/Lung-VA-001')
 
 
 if __name__ == "__main__":
