@@ -181,8 +181,9 @@ def segment_lung_mask(image, fill_lung_structures=True):
     # Makes all the air pixels 0, everything else 1
     binary_image = np.array(image > -320, dtype=np.int8)
 
-    # Close up sinuses so the lungs are not connected to the outside
-    binary_image = scipy.ndimage.morphology.binary_closing(binary_image, structure=np.ones([5, 5, 5])) + 1
+    for i, axial_slice in enumerate(binary_image):
+        # Close up sinuses so the lungs are not connected to the outside
+        binary_image[i] = scipy.ndimage.morphology.binary_closing(axial_slice, structure=np.ones([20, 20])) + 1
 
     # Turns every group of same digits into a unique number, separating air in lungs from air outside lungs
     labels = measure.label(binary_image, connectivity=1)
@@ -203,16 +204,16 @@ def segment_lung_mask(image, fill_lung_structures=True):
         # For every slice we determine the largest solid structure
         for i, axial_slice in enumerate(binary_image):
 
-            # Make axial slices binary, 1 is air enclosed in body, 0 is body and outside air
+            # Make axial slices binary, 0 is air enclosed in body, 1 is body and outside air
             axial_slice = axial_slice - 1
 
             # Label the air inside the body
             labeling = measure.label(axial_slice)
 
-            # Find the largest volume (which will be the lungs)
+            # Find the largest volume (which will be everything except for the mass inside the lungs)
             l_max = largest_label_volume(labeling, bg=0)
 
-            # If the slice contains lungs, the labels that aren't the maximum are turned to 1, which means ignored
+            # If the slice contains lungs, the labels that aren't the maximum are turned to 1, which is solid in lungs
             if l_max is not None:
                 binary_image[i][labeling != l_max] = 1
 
@@ -220,11 +221,11 @@ def segment_lung_mask(image, fill_lung_structures=True):
     binary_image -= 1
     binary_image = 1 - binary_image
 
-    # Remove other air pockets inside body
-    labels = measure.label(binary_image, background=0)
-    l_max = largest_label_volume(labels, bg=0)
-    if l_max is not None:
-        binary_image[labels != l_max] = 0
+    # # Remove other air pockets inside body
+    # labels = measure.label(binary_image, background=0)
+    # l_max = largest_label_volume(labels, bg=0)
+    # if l_max is not None:
+    #     binary_image[labels != l_max] = 0
 
     # Dilate the image
     dilated = scipy.ndimage.morphology.binary_dilation(binary_image, structure=np.ones([10, 10, 10]))
@@ -369,7 +370,7 @@ def main():
     temp_segmentation = segment_lung_mask(temp_image, True)
     np.save('processed_data/Lung-VA-001/lung.npy', temp_segmentation)
 
-    # Processes all patients folders within the given directory
+    # # Processes all patients folders within the given directory
     # process_data('raw_data')
 
     # Display the data in the given folder
