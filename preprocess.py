@@ -212,8 +212,6 @@ def resample_mask(image, space_directions, new_spacing=[1, 1, 1]):
 
 
 def load_image(path):
-    # Start timer
-    start_time = time.time()
 
     # Loading the data
     print('Loading data...')
@@ -236,9 +234,6 @@ def load_image(path):
     print('Generating lung mask...')
     lung_mask = get_lung_mask(ct_resampled_image)
 
-    # Print time
-    print("--- Patient data loaded in %s seconds ---" % (time.time() - start_time))
-
     return ct_resampled_image, pet_resampled_image, tumor_resampled_mask, lung_mask
 
 
@@ -253,23 +248,22 @@ def get_lung_mask(image):
     return dilated_mask
 
 
-def display_ct_pet(dir):
+def display_ct_pet(folder):
 
     # Load the scans
-    ct = np.load(dir + '/CT.npy')
-    pet = np.load(dir + '/PET.npy')
-    seg = np.load(dir + '/mask.npy')
-    lung = np.load(dir + '/lung.npy')
+    ct = np.load(folder + '/CT.npy')
+    pet = np.load(folder + '/PET.npy')
+    seg = np.load(folder + '/mask.npy')
+    lung = np.load(folder + '/lung.npy')
+    print("CT shape: ", ct.shape, " || Pet shape: ", pet.shape, " || Seg shape: ", seg.shape, " || Lung shape: ", lung.shape)
 
     # Make the pet the same size as the ct scan
     difference = int((pet.shape[1] - ct.shape[1]) / 2)
     pet = pet[:, difference:-difference, difference:-difference]
 
     # Find where the tumor is
-    z_max = np.unravel_index(np.argmax(seg), seg.shape)[0]
-    print(z_max)
-    image_index = z_max + 10
-    print(ct.shape, pet.shape, seg.shape)
+    image_index = np.unravel_index(np.argmax(seg), seg.shape)[0] + 10
+    print('Z index: ', image_index)
 
     # Plot all of them
     plt.subplot(2, 2, 3)
@@ -291,6 +285,9 @@ def process_data():
     for patient in patients:
         print('Patient: ', patient)
 
+        # Start timer
+        start_time1 = time.time()
+
         # Load the image of the given patient
         ct, pet, mask, lung = load_image(INPUT_FOLDER + "/" + patient)
 
@@ -304,13 +301,16 @@ def process_data():
         np.save('processed_data/' + patient + "/mask", mask)
         np.save('processed_data/' + patient + "/lung", lung)
 
+        # Print time
+        print("--- Patient data loaded in %s seconds ---" % (time.time() - start_time1))
+
     # Print time
     print("--- Total time elapsed: %s seconds ---" % (time.time() - start_time))
 
 def main():
 
-    process_data()
-    # display_ct_pet('processed_data/Lung-CHOP-001')
+    # process_data()
+    display_ct_pet('processed_data/Lung-CHOP-001')
 
     # print('Creating mask...')
     # lung_mask = get_lung_mask(loaded_image)
