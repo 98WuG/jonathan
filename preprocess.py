@@ -227,7 +227,7 @@ def segment_lung_mask(image, fill_lung_structures=True):
     #     binary_image[labels != l_max] = 0
 
     # Dilate the image
-    dilated = scipy.ndimage.morphology.binary_dilation(binary_image, structure=mrt.sphere(15, 5))
+    dilated = scipy.ndimage.morphology.binary_dilation(binary_image, structure=mrt.sphere(25, 10))
 
     return dilated
 
@@ -319,7 +319,7 @@ def display_ct_pet(folder):
     plt.subplot(2, 2, 2)
     plt.imshow(pet[image_index], cmap=plt.cm.gray)
     plt.subplot(2, 2, 4)
-    plt.imshow(lung[image_index], cmap=plt.cm.gray)
+    plt.imshow(np.transpose([4*pet[image_index]/np.max(pet), lung[image_index]/2, normalize(ct[image_index])/2.5], [1, 2, 0]))
     plt.show()
 
 
@@ -367,7 +367,7 @@ def main():
     # Lung segmentation stuff
     temp_image = np.load('processed_data/Lung-VA-001/CT.npy')
     temp_segmentation = segment_lung_mask(temp_image, True)
-    np.save('processed_data/Lung-VA-001/lung.npy', temp_segmentation)
+    np.save('processed_data/Lung-VA-001/lung.Znpy', temp_segmentation)
 
     # # Processes all patients folders within the given directory
     # process_data('raw_data')
