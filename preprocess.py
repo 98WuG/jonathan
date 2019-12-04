@@ -7,6 +7,7 @@ from skimage import measure, morphology
 import re
 import nrrd
 import time
+import raster_geometry as mrt
 
 
 def load_scan(path):
@@ -181,7 +182,7 @@ def segment_lung_mask(image, fill_lung_structures=True):
 
     for i, axial_slice in enumerate(binary_image):
         # Close up sinuses so the lungs are not connected to the outside
-        binary_image[i] = scipy.ndimage.morphology.binary_closing(axial_slice, structure=np.ones([20, 20])) + 1
+        binary_image[i] = scipy.ndimage.morphology.binary_closing(axial_slice, structure=mrt.circle(25, 10)) + 1
 
     # Turns every group of same digits into a unique number, separating air in lungs from air outside lungs
     labels = measure.label(binary_image, connectivity=1)
@@ -226,7 +227,7 @@ def segment_lung_mask(image, fill_lung_structures=True):
     #     binary_image[labels != l_max] = 0
 
     # Dilate the image
-    dilated = scipy.ndimage.morphology.binary_dilation(binary_image, structure=np.ones([10, 10, 10]))
+    dilated = scipy.ndimage.morphology.binary_dilation(binary_image, structure=mrt.sphere(15, 5))
 
     return dilated
 
