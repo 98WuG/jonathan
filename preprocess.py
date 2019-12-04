@@ -8,6 +8,7 @@ from skimage import measure, morphology
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import re
 import nrrd
+import time
 
 # Some constants
 INPUT_FOLDER = 'raw_data'
@@ -211,40 +212,66 @@ def resample_mask(image, space_directions, new_spacing=[1, 1, 1]):
 
 
 def load_image(path):
+    # Start timer
+    start_time = time.time()
+
     # Loading the data
+    print('Loading data...')
     ct_data, pet_data, tumor_mask = load_scan(path)
     ct_pixel = get_pixels_hu(ct_data)
     pet_pixel = get_pixels_hu(pet_data)
 
     # Resampling the image
+    print('Resampling mask...')
     tumor_resampled_mask, spacing = resample_mask(tumor_mask[0], tumor_mask[1]['space directions'])
+    print('Resampling CT...')
     ct_resampled_image, spacing = resample(ct_pixel, ct_data, [1, 1, 1])
+    print('Resampling PET...')
     pet_resampled_image, spacing = resample(pet_pixel, pet_data, [1, 1, 1])
 
+    # Rotate the mask
     tumor_resampled_mask = np.transpose(tumor_resampled_mask, [2, 1, 0])
-    return ct_resampled_image, pet_resampled_image, tumor_resampled_mask
+
+    # Get the lung mask
+    print('Generating lung mask...')
+    lung_mask = get_lung_mask(ct_resampled_image)
+
+    # Print time
+    print("--- Patient data loaded in %s seconds ---" % (time.time() - start_time))
+
+    return ct_resampled_image, pet_resampled_image, tumor_resampled_mask, lung_mask
 
 
 def get_lung_mask(image):
+
+    # Get the segmentation
     segmented_lungs_fill = segment_lung_mask(image, True)
-    dilated_mask = scipy.ndimage.morphology.binary_dilation(segmented_lungs_fill, structure=np.ones([15, 15, 15]))
+
+    # Dilate the mask
+    dilated_mask = scipy.ndimage.morphology.binary_dilation(segmented_lungs_fill, structure=np.ones([10, 10, 10]))
 
     return dilated_mask
 
 
 def display_ct_pet(dir):
 
+    # Load the scans
     ct = np.load(dir + '/CT.npy')
     pet = np.load(dir + '/PET.npy')
     seg = np.load(dir + '/mask.npy')
+    lung = np.load(dir + '/lung.npy')
+
+    # Make the pet the same size as the ct scan
+    difference = int((pet.shape[1] - ct.shape[1]) / 2)
+    pet = pet[:, difference:-difference, difference:-difference]
+
+    # Find where the tumor is
     z_max = np.unravel_index(np.argmax(seg), seg.shape)[0]
     print(z_max)
     image_index = z_max + 10
     print(ct.shape, pet.shape, seg.shape)
 
-    difference = int((pet.shape[1] - ct.shape[1])/2)
-    pet = pet[:, difference:-difference, difference:-difference]
-
+    # Plot all of them
     plt.subplot(2, 2, 3)
     plt.imshow(np.transpose([4*pet[image_index]/np.max(pet), seg[image_index], normalize(ct[image_index])/2.5], [1, 2, 0]))
     plt.subplot(2, 2, 1)
@@ -252,25 +279,38 @@ def display_ct_pet(dir):
     plt.subplot(2, 2, 2)
     plt.imshow(pet[image_index], cmap=plt.cm.gray)
     plt.subplot(2, 2, 4)
-    plt.imshow(seg[image_index], cmap=plt.cm.gray)
+    plt.imshow(lung[image_index], cmap=plt.cm.gray)
     plt.show()
 
 
 def process_data():
+    # Start timer
+    start_time = time.time()
+
+    # Loop through every patient
     for patient in patients:
         print('Patient: ', patient)
-        ct, pet, mask = load_image(INPUT_FOLDER + "/" + patient)
 
+        # Load the image of the given patient
+        ct, pet, mask, lung = load_image(INPUT_FOLDER + "/" + patient)
+
+        # Create a directory if it doesn't exist
         if not os.path.exists('processed_data/' + patient):
             os.makedirs('processed_data/' + patient)
+
+        # Save as numpy arrays
         np.save('processed_data/' + patient + "/PET", pet)
         np.save('processed_data/' + patient + "/CT", ct)
         np.save('processed_data/' + patient + "/mask", mask)
+        np.save('processed_data/' + patient + "/lung", lung)
+
+    # Print time
+    print("--- Total time elapsed: %s seconds ---" % (time.time() - start_time))
 
 def main():
 
-    # process_data()
-    display_ct_pet('processed_data/Lung-VA-002')
+    process_data()
+    # display_ct_pet('processed_data/Lung-CHOP-001')
 
     # print('Creating mask...')
     # lung_mask = get_lung_mask(loaded_image)
