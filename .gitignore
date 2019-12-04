@@ -1,0 +1,10 @@
+.idea
+__pycache__
+DICOM\ viewer
+dicom_data
+DL_test
+processed_data
+raw_data
+slicer_database
+*.docx
+*.npy
