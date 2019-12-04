@@ -8,3 +8,4 @@ raw_data
 slicer_database
 *.docx
 *.npy
+venv
