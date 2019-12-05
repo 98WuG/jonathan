@@ -272,20 +272,24 @@ def load_image(path):
 
     # Resampling the image
     print('Resampling mask...')
-    tumor_resampled_mask, spacing = resample_mask(tumor_mask[0], tumor_mask[1]['space directions'])
+    tumor_resampled_mask1, spacing = resample_mask(tumor_mask[0], tumor_mask[1]['space directions'])
+    tumor_resampled_mask2, spacing = resample_mask(tumor_mask[0], tumor_mask[1]['space directions'], [2, 2, 2])
+    tumor_resampled_mask3, spacing = resample_mask(tumor_mask[0], tumor_mask[1]['space directions'], [4, 4, 4])
     print('Resampling CT...')
     ct_resampled_image, spacing = resample(ct_pixel, ct_data, [1, 1, 1])
     print('Resampling PET...')
     pet_resampled_image, spacing = resample(pet_pixel, pet_data, [1, 1, 1])
 
     # Rotate the mask
-    tumor_resampled_mask = np.transpose(tumor_resampled_mask, [2, 1, 0])
+    tumor_resampled_mask1 = np.transpose(tumor_resampled_mask1, [2, 1, 0])
+    tumor_resampled_mask2 = np.transpose(tumor_resampled_mask2, [2, 1, 0])
+    tumor_resampled_mask3 = np.transpose(tumor_resampled_mask3, [2, 1, 0])
 
     # # Get the lung mask
     # print('Generating lung mask...')
     # lung_mask = segment_lung_mask(ct_resampled_image[:-200], True)
 
-    return ct_resampled_image, pet_resampled_image, tumor_resampled_mask,
+    return ct_resampled_image, pet_resampled_image, tumor_resampled_mask1, tumor_resampled_mask2, tumor_resampled_mask3
 
 
 def display_ct_pet(folder):
@@ -298,9 +302,10 @@ def display_ct_pet(folder):
     # Load the scans
     ct = np.load(folder + '/CT.npy')
     pet = np.load(folder + '/PET.npy')
-    seg = np.load(folder + '/mask.npy')
+    seg = np.load(folder + '/mask_original.npy')
+    seg1 = np.load(folder + '/mask_quarter.npy')
     # lung = np.load(folder + '/lung.npy')
-    print("CT shape: ", ct.shape, " || Pet shape: ", pet.shape, " || Seg shape: ", seg.shape)
+    print("CT shape: ", ct.shape, " || Pet shape: ", pet.shape, " || Seg shape: ", seg.shape, " || Seg1 shape: ", seg1.shape)
 
     # Make the pet the same size as the ct scan
     difference = int((pet.shape[1] - ct.shape[1]) / 2)
@@ -318,7 +323,7 @@ def display_ct_pet(folder):
     plt.subplot(2, 2, 2)
     plt.imshow(pet[image_index], cmap=plt.cm.gray)
     plt.subplot(2, 2, 4)
-    plt.imshow(seg[image_index], cmap=plt.cm.gray)
+    plt.imshow(seg1[int(image_index/4)], cmap=plt.cm.gray)
     plt.show()
 
 
@@ -342,7 +347,7 @@ def process_data(parent_directory):
         start_time1 = time.time()
 
         # Load the image of the given patient
-        ct, pet, mask = load_image(parent_directory + "/" + patient)
+        ct, pet, mask1, mask2, mask3 = load_image(parent_directory + "/" + patient)
 
         # Create a directory if it doesn't exist
         if not os.path.exists('processed_data/' + patient):
@@ -351,7 +356,10 @@ def process_data(parent_directory):
         # Save as numpy arrays
         np.save('processed_data/' + patient + "/PET", pet)
         np.save('processed_data/' + patient + "/CT", ct)
-        np.save('processed_data/' + patient + "/mask", mask)
+        np.save('processed_data/' + patient + "/mask_original", mask1)
+        np.save('processed_data/' + patient + "/mask_half", mask2)
+        np.save('processed_data/' + patient + "/mask_quarter", mask3)
+
         # np.save('processed_data/' + patient + "/lung", lung)
 
         # Print time
@@ -395,7 +403,7 @@ def main():
     process_data('C:/Users/Jonathan Lee/Dropbox/Lung PET segmentation/VA PET/')
 
     # Display the data in the given folder
-    display_ct_pet('processed_data/Lung-VA-002')
+    display_ct_pet('processed_data/Lung-VA-001')
 
 
 if __name__ == "__main__":
