@@ -3,11 +3,11 @@ import pydicom
 import os
 import scipy.ndimage
 import matplotlib.pyplot as plt
-from skimage import measure, morphology
+# from skimage import measure, morphology
 import re
 import nrrd
 import time
-import raster_geometry as mrt
+# import raster_geometry as mrt
 
 
 def load_scan(path):
