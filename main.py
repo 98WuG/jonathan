@@ -1,6 +1,6 @@
 from __future__ import absolute_import
 from matplotlib import pyplot as plt
-#from preprocess import get_data
+# from preprocess import get_data
 
 import os
 import tensorflow as tf

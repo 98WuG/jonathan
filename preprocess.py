@@ -392,7 +392,7 @@ def get_mask_bounds(mask):
 def main():
 
     # Processes all patients folders within the given directory
-    process_data('raw_data')
+    process_data('C:/Users/Jonathan Lee/Dropbox/Lung PET segmentation/VA PET/')
 
     # Display the data in the given folder
     display_ct_pet('processed_data/Lung-VA-002')
