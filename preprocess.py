@@ -168,68 +168,67 @@ def largest_label_volume(im, bg=-1):
     else:
         return None
 
-
-def segment_lung_mask(image, fill_lung_structures=True):
-    """
-    This returns a mask which covers the lungs
-    :param image: 3d np array
-    :param fill_lung_structures: true if you want to include hard structures inside lungs
-    :return: binary mask
-    """
-
-    # Makes all the air pixels 0, everything else 1
-    binary_image = np.array(image > -320, dtype=np.int8)
-
-    for i, axial_slice in enumerate(binary_image):
-        # Close up sinuses so the lungs are not connected to the outside
-        binary_image[i] = scipy.ndimage.morphology.binary_closing(axial_slice, structure=mrt.circle(25, 10)) + 1
-
-    # Turns every group of same digits into a unique number, separating air in lungs from air outside lungs
-    labels = measure.label(binary_image, connectivity=1)
-
-    # Pick the pixel in the very corner to determine which label is air.
-    #   Improvement: Pick multiple background labels from around the patient
-    #   More resistant to "trays" on which the patient lays cutting the air
-    #   around the person in half
-    background_label = labels[0, 0, 0]
-
-    # Fill the air around the person
-    binary_image[background_label == labels] = 2
-
-    # Method of filling the lung structures (that is superior to something like
-    # morphological closing)
-    if fill_lung_structures:
-
-        # For every slice we determine the largest solid structure
-        for i, axial_slice in enumerate(binary_image):
-
-            # Make axial slices binary, 0 is air enclosed in body, 1 is body and outside air
-            axial_slice = axial_slice - 1
-
-            # Label the air inside the body
-            labeling = measure.label(axial_slice)
-
-            # Find the largest volume (which will be everything except for the mass inside the lungs)
-            l_max = largest_label_volume(labeling, bg=0)
-
-            # If the slice contains lungs, the labels that aren't the maximum are turned to 1, which is solid in lungs
-            if l_max is not None:
-                binary_image[i][labeling != l_max] = 1
-
-    # Make the lungs 1, everything else 0
-    binary_image -= 1
-    binary_image = 1 - binary_image
-
-    # # Remove other air pockets inside body
-    # labels = measure.label(binary_image, background=0)
-    # l_max = largest_label_volume(labels, bg=0)
-    # if l_max is not None:
-    #     binary_image[labels != l_max] = 0
-
-    # Dilate the image
-    dilated = scipy.ndimage.morphology.binary_dilation(binary_image, structure=mrt.sphere(25, 10))
-
-    return dilated
+# I don't think I need this
+# def segment_lung_mask(image, fill_lung_structures=True):
+#     """
+#     This returns a mask which covers the lungs
+#     :param image: 3d np array
+#     :param fill_lung_structures: true if you want to include hard structures inside lungs
+#     :return: binary mask
+#     """
+#
+#     # Makes all the air pixels 0, everything else 1
+#     binary_image = np.array(image > -320, dtype=np.int8) + 1
+#
+#     # # Close up sinuses so the lungs are not connected to the outside
+#     # binary_image = scipy.ndimage.morphology.binary_closing(binary_image, structure=mrt.sphere(25, 10)) + 1
+#
+#     # Turns every group of same digits into a unique number, separating air in lungs from air outside lungs
+#     labels = measure.label(binary_image, connectivity=1)
+#
+#     # Pick the pixel in the very corner to determine which label is air.
+#     #   Improvement: Pick multiple background labels from around the patient
+#     #   More resistant to "trays" on which the patient lays cutting the air
+#     #   around the person in half
+#     background_label = labels[0, 0, 0]
+#
+#     # Fill the air around the person
+#     binary_image[background_label == labels] = 2
+#
+#     # Method of filling the lung structures (that is superior to something like
+#     # morphological closing)
+#     if fill_lung_structures:
+#
+#         # For every slice we determine the largest solid structure
+#         for i, axial_slice in enumerate(binary_image):
+#
+#             # Make axial slices binary, 0 is air enclosed in body, 1 is body and outside air
+#             axial_slice = axial_slice - 1
+#
+#             # Label the air inside the body
+#             labeling = measure.label(axial_slice)
+#
+#             # Find the largest volume (which will be everything except for the mass inside the lungs)
+#             l_max = largest_label_volume(labeling, bg=0)
+#
+#             # If the slice contains lungs, the labels that aren't the maximum are turned to 1, which is solid in lungs
+#             if l_max is not None:
+#                 binary_image[i][labeling != l_max] = 1
+#
+#     # Make the lungs 1, everything else 0
+#     binary_image -= 1
+#     binary_image = 1 - binary_image
+#
+#     # # Remove other air pockets inside body
+#     # labels = measure.label(binary_image, background=0)
+#     # l_max = largest_label_volume(labels, bg=0)
+#     # if l_max is not None:
+#     #     binary_image[labels != l_max] = 0
+#
+#     # Dilate the image
+#     dilated = scipy.ndimage.morphology.binary_dilation(binary_image, structure=mrt.sphere(15, 5))
+#
+#     return dilated
 
 
 def normalize(image, min_bound=-1000.0, max_bound=400.0):
@@ -282,11 +281,11 @@ def load_image(path):
     # Rotate the mask
     tumor_resampled_mask = np.transpose(tumor_resampled_mask, [2, 1, 0])
 
-    # Get the lung mask
-    print('Generating lung mask...')
-    lung_mask = segment_lung_mask(ct_resampled_image, True)
+    # # Get the lung mask
+    # print('Generating lung mask...')
+    # lung_mask = segment_lung_mask(ct_resampled_image[:-200], True)
 
-    return ct_resampled_image, pet_resampled_image, tumor_resampled_mask, lung_mask
+    return ct_resampled_image, pet_resampled_image, tumor_resampled_mask,
 
 
 def display_ct_pet(folder):
@@ -300,8 +299,8 @@ def display_ct_pet(folder):
     ct = np.load(folder + '/CT.npy')
     pet = np.load(folder + '/PET.npy')
     seg = np.load(folder + '/mask.npy')
-    lung = np.load(folder + '/lung.npy')
-    print("CT shape: ", ct.shape, " || Pet shape: ", pet.shape, " || Seg shape: ", seg.shape, " || Lung shape: ", lung.shape)
+    # lung = np.load(folder + '/lung.npy')
+    print("CT shape: ", ct.shape, " || Pet shape: ", pet.shape, " || Seg shape: ", seg.shape)
 
     # Make the pet the same size as the ct scan
     difference = int((pet.shape[1] - ct.shape[1]) / 2)
@@ -319,7 +318,7 @@ def display_ct_pet(folder):
     plt.subplot(2, 2, 2)
     plt.imshow(pet[image_index], cmap=plt.cm.gray)
     plt.subplot(2, 2, 4)
-    plt.imshow(np.transpose([4*pet[image_index]/np.max(pet), lung[image_index]/2, normalize(ct[image_index])/2.5], [1, 2, 0]))
+    plt.imshow(seg[image_index], cmap=plt.cm.gray)
     plt.show()
 
 
@@ -343,7 +342,7 @@ def process_data(parent_directory):
         start_time1 = time.time()
 
         # Load the image of the given patient
-        ct, pet, mask, lung = load_image(parent_directory + "/" + patient)
+        ct, pet, mask = load_image(parent_directory + "/" + patient)
 
         # Create a directory if it doesn't exist
         if not os.path.exists('processed_data/' + patient):
@@ -353,7 +352,7 @@ def process_data(parent_directory):
         np.save('processed_data/' + patient + "/PET", pet)
         np.save('processed_data/' + patient + "/CT", ct)
         np.save('processed_data/' + patient + "/mask", mask)
-        np.save('processed_data/' + patient + "/lung", lung)
+        # np.save('processed_data/' + patient + "/lung", lung)
 
         # Print time
         print("--- Patient data loaded in %s seconds ---" % (time.time() - start_time1))
@@ -362,18 +361,41 @@ def process_data(parent_directory):
     print("--- Total time elapsed: %s seconds ---" % (time.time() - start_time))
 
 
+def get_mask_bounds(mask):
+    """
+    Takes in a tumor mask, returns the upper and lower bounds
+    :param mask: 3d np array
+    :return: lower(x,y,z), upper(x,y,z)
+    """
+
+    # Looking for the x bounds
+    x_mask = np.max(mask, 2)
+    x_mask = np.max(x_mask, 1)
+    x_up = np.argmax(x_mask)
+    x_low = np.argmin(x_mask)
+
+    # Looking for the y bounds
+    y_mask = np.max(mask, 2)
+    y_mask = np.max(y_mask, 0)
+    y_up = np.argmax(y_mask)
+    y_low = np.argmin(y_mask)
+
+    # Looking for the z bounds
+    z_mask = np.max(mask, 1)
+    z_mask = np.max(z_mask, 0)
+    z_up = np.argmax(z_mask)
+    z_low = np.argmin(z_mask)
+
+    return [x_low, y_low, z_low], [x_up, y_up, z_up]
+
+
 def main():
 
-    # Lung segmentation stuff
-    temp_image = np.load('processed_data/Lung-VA-001/CT.npy')
-    temp_segmentation = segment_lung_mask(temp_image, True)
-    np.save('processed_data/Lung-VA-001/lung.Znpy', temp_segmentation)
-
-    # # Processes all patients folders within the given directory
-    # process_data('raw_data')
+    # Processes all patients folders within the given directory
+    process_data('raw_data')
 
     # Display the data in the given folder
-    display_ct_pet('processed_data/Lung-VA-001')
+    display_ct_pet('processed_data/Lung-VA-002')
 
 
 if __name__ == "__main__":
