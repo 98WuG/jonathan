@@ -117,7 +117,7 @@ def resample(image, scan, new_spacing=[1, 1, 1]):
     return image, new_spacing
 
 
-def resample_mask(image, space_directions, new_spacing=[1, 1, 1]):
+def resample_mask(image, new_spacing=[1, 1, 1]):
     """
     This resamples the mask into a new dimension, needed a new one because these are .nrrd
     :param image: np array image
@@ -126,7 +126,7 @@ def resample_mask(image, space_directions, new_spacing=[1, 1, 1]):
     :return: resampled image
     """
     # Determine current pixel spacing
-    spacing = np.array([space_directions[0, 0], space_directions[1, 1], space_directions[2, 2]], dtype=np.float32)
+    spacing = np.array([1, 1, 1], dtype=np.float32)
 
     # How much we need to scale each dimension
     resize_factor = spacing / new_spacing
@@ -292,41 +292,6 @@ def load_image(path):
     return ct_resampled_image, pet_resampled_image, tumor_resampled_mask1, tumor_resampled_mask2, tumor_resampled_mask3
 
 
-def display_ct_pet(folder):
-    """
-    This displaces the ct, pet, tumor mask, and lung mask in 2d axial view of the tumor
-    :param folder: the folder in which all these scans, saved as np arrays, are located
-    :return: none
-    """
-
-    # Load the scans
-    ct = np.load(folder + '/CT.npy')
-    pet = np.load(folder + '/PET.npy')
-    seg = np.load(folder + '/mask_original.npy')
-    seg1 = np.load(folder + '/mask_quarter.npy')
-    # lung = np.load(folder + '/lung.npy')
-    print("CT shape: ", ct.shape, " || Pet shape: ", pet.shape, " || Seg shape: ", seg.shape, " || Seg1 shape: ", seg1.shape)
-
-    # Make the pet the same size as the ct scan
-    difference = int((pet.shape[1] - ct.shape[1]) / 2)
-    pet = pet[:, difference:-difference, difference:-difference]
-
-    # Find where the tumor is
-    image_index = np.unravel_index(np.argmax(seg), seg.shape)[0] + 10
-    print('Z index: ', image_index)
-
-    # Plot all of them
-    plt.subplot(2, 2, 3)
-    plt.imshow(np.transpose([4*pet[image_index]/np.max(pet), seg[image_index], normalize(ct[image_index])/2.5], [1, 2, 0]))
-    plt.subplot(2, 2, 1)
-    plt.imshow(ct[image_index], cmap=plt.cm.gray)
-    plt.subplot(2, 2, 2)
-    plt.imshow(pet[image_index], cmap=plt.cm.gray)
-    plt.subplot(2, 2, 4)
-    plt.imshow(seg1[int(image_index/4)], cmap=plt.cm.gray)
-    plt.show()
-
-
 def process_data(parent_directory):
     """
     This takes a parent directory and processes all the patients, as folders, within it
@@ -379,31 +344,154 @@ def get_mask_bounds(mask):
     # Looking for the x bounds
     x_mask = np.max(mask, 2)
     x_mask = np.max(x_mask, 1)
-    x_up = np.argmax(x_mask)
-    x_low = np.argmin(x_mask)
+    x_index = [i for i, x in enumerate(x_mask) if x]
+    x_up = x_index[-1]
+    x_low = x_index[0]
 
     # Looking for the y bounds
     y_mask = np.max(mask, 2)
     y_mask = np.max(y_mask, 0)
-    y_up = np.argmax(y_mask)
-    y_low = np.argmin(y_mask)
+    y_index = [i for i, x in enumerate(y_mask) if x]
+    y_up = y_index[-1]
+    y_low = y_index[0]
 
     # Looking for the z bounds
     z_mask = np.max(mask, 1)
     z_mask = np.max(z_mask, 0)
-    z_up = np.argmax(z_mask)
-    z_low = np.argmin(z_mask)
+    z_index = [i for i, x in enumerate(z_mask) if x]
+    z_up = z_index[-1]
+    z_low = z_index[0]
 
     return [x_low, y_low, z_low], [x_up, y_up, z_up]
+
+def cut_random_cubes(ct, pet, mask):
+    """
+    This cuts random 128x128x128 cubes that include the tumor
+    :param ct: full ct scan
+    :param pet: full pet scan
+    :param mask: full mask
+    :return: images (128, 128, 128, 2), mask (128, 128, 128), mask(64,64,64), mask(32,32,32)
+    """
+
+    # Make the pet scan the same size as the other scans
+    difference = int((pet.shape[1] - ct.shape[1]) / 2)
+    pet = pet[:, difference:-difference, difference:-difference]
+
+    # Get the high and low indices of the mask and turn into numpy arrays
+    low, high = get_mask_bounds(mask)
+    low = np.array(low)
+    high = np.array(high)
+    difference = high - low
+
+    # Check if the tumor can be put inside with padding of at least 12
+    if np.any(difference > 104):
+        too_big = True
+        print('Tumor too big')
+        return
+    else:
+        too_big = False
+
+    # This is the index with the tumor right in the corner with 12 padding
+    temp_index = np.array(low) - 12
+
+    # How much more can you subtract from it without getting out of bounds
+    max_subtraction = 104 - difference
+
+    # Add on a number from 0 to max_addition
+    subtraction = np.floor((max_subtraction + 1) * np.random.uniform(size=[3, ]))
+    final_index = (temp_index - subtraction).astype(int)
+
+    # Use the index to find the resulting cubes
+    final_ct = ct[final_index[0]:final_index[0]+128, final_index[1]:final_index[1]+128, final_index[2]:final_index[2]+128]
+    final_pet = pet[final_index[0]:final_index[0]+128, final_index[1]:final_index[1]+128, final_index[2]:final_index[2]+128]
+    final_mask = mask[final_index[0]:final_index[0]+128, final_index[1]:final_index[1]+128, final_index[2]:final_index[2]+128]
+
+    # Downsample the mask 2, 4
+    mask2, spacing = resample_mask(final_mask, [2, 2, 2])
+    mask3, spacing = resample_mask(final_mask, [4, 4, 4])
+
+    return final_ct, final_pet, final_mask, mask2, mask3
+
+
+def display_ct_pet_processed(ct, pet, seg, seg1):
+    """
+    This displaces the ct, pet, tumor mask, and lung mask in 2d axial view of the tumor
+    :param folder: the folder in which all these scans, saved as np arrays, are located
+    :return: none
+    """
+
+    print("CT shape: ", ct.shape, " || Pet shape: ", pet.shape, " || Seg shape: ", seg.shape, " || Seg1 shape: ", seg1.shape)
+
+    # Find where the tumor is
+    image_index = np.unravel_index(np.argmax(seg), seg.shape)[0] + 10
+    print('Z index: ', image_index)
+
+    # Plot all of them
+    plt.subplot(2, 2, 3)
+    plt.imshow(
+        np.transpose([4 * pet[image_index] / np.max(pet), seg[image_index], normalize(ct[image_index]) / 2.5],
+                     [1, 2, 0]))
+    plt.subplot(2, 2, 1)
+    plt.imshow(ct[image_index], cmap=plt.cm.gray)
+    plt.subplot(2, 2, 2)
+    plt.imshow(pet[image_index], cmap=plt.cm.gray)
+    plt.subplot(2, 2, 4)
+    plt.imshow(seg1[int(image_index/4)], cmap=plt.cm.gray)
+    plt.show()
+
+
+def display_ct_pet(folder):
+    """
+    This displaces the ct, pet, tumor mask, and lung mask in 2d axial view of the tumor
+    :param folder: the folder in which all these scans, saved as np arrays, are located
+    :return: none
+    """
+
+    # Load the scans
+    ct = np.load(folder + '/CT.npy')
+    pet = np.load(folder + '/PET.npy')
+    seg = np.load(folder + '/mask_original.npy')
+    seg1 = np.load(folder + '/mask_quarter.npy')
+    print("CT shape: ", ct.shape, " || Pet shape: ", pet.shape, " || Seg shape: ", seg.shape, " || Seg1 shape: ",
+          seg1.shape)
+
+    # Make the pet the same size as the ct scan
+    difference = int((pet.shape[1] - ct.shape[1]) / 2)
+    pet = pet[:, difference:-difference, difference:-difference]
+
+    # Find where the tumor is
+    image_index = np.unravel_index(np.argmax(seg), seg.shape)[0] + 10
+    print('Z index: ', image_index)
+
+    # Plot all of them
+    plt.subplot(2, 2, 3)
+    plt.imshow(
+        np.transpose([4 * pet[image_index] / np.max(pet), seg[image_index], normalize(ct[image_index]) / 2.5],
+                     [1, 2, 0]))
+    plt.subplot(2, 2, 1)
+    plt.imshow(ct[image_index], cmap=plt.cm.gray)
+    plt.subplot(2, 2, 2)
+    plt.imshow(pet[image_index], cmap=plt.cm.gray)
+    plt.subplot(2, 2, 4)
+    plt.imshow(seg1[int(image_index / 4)], cmap=plt.cm.gray)
+    plt.show()
 
 
 def main():
 
     # Processes all patients folders within the given directory
-    process_data('C:/Users/Jonathan Lee/Dropbox/Lung PET segmentation/VA PET/')
+    # process_data('C:/Users/Jonathan Lee/Dropbox/Lung PET segmentation/VA PET/')
 
     # Display the data in the given folder
     display_ct_pet('processed_data/Lung-VA-001')
+
+    ct = np.load('processed_data/Lung-VA-001/CT.npy')
+    pet = np.load('processed_data/Lung-VA-001/PET.npy')
+    mask = np.load('processed_data/Lung-VA-001/mask_original.npy')
+
+    final_ct, final_pet, final_mask, mask2, mask3 = cut_random_cubes(ct, pet, mask)
+
+    display_ct_pet_processed(final_ct, final_pet, final_mask, mask3)
 
 
 if __name__ == "__main__":

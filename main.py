@@ -6,6 +6,8 @@ import os
 import tensorflow as tf
 import numpy as np
 import random
+from preprocess import cut_random_cubes, normalize, zero_center
+import time
 
 
 class Model(tf.keras.Model):
@@ -249,28 +251,63 @@ class Model(tf.keras.Model):
         return tf.reduce_mean(tf.cast(correct_predictions, tf.float32))
 
 
-def train(model, train_inputs, train_labels):
-    '''
-    :param model: the initialized model to use for the forward pass and backward pass
-    :param train_inputs: train inputs (all inputs to use for training),
-    shape (num_inputs, width, height, depth, num_channels)
-    :param train_labels: train labels (all labels to use for training),
-    shape (num_labels, width, height, depth)
-    :return: None
-    '''
+def train(model, folder):
+    """
+    This trains the model using the data from the given folder and the given model
+    :param model:
+    :param folder:
+    :return:
+    """
 
-    last_index = int(len(train_labels)/model.batch_size)
+    # Get the list of folders in patients
+    patients = sorted(os.listdir(folder))
 
+    # Find the last index given the patients and batch_size
+    last_index = int(len(patients)/model.batch_size)
+
+    # Loop through every batch
     for i in range(last_index):
-        # print('Train Batch: ', i + 1, 'out of ', last_index)
-        temp_train = train_inputs[model.batch_size*i:model.batch_size*(i+1)]
-        temp_labels = train_labels[model.batch_size*i:model.batch_size*(i+1)]
-        with tf.GradientTape() as tape:
-            logits1, logits2, logits3 = model.call(temp_train)
-            loss = model.loss(logits3, temp_labels)
+        print('Train Batch: ', i + 1, 'out of ', last_index)
+        start_time = time.time()
 
+        # These store the inputs and labels of the batch
+        inputs = []
+        labels = []
+
+        # Load the patient data and turn into cubes
+        for j in range(model.batch_size):
+
+            # Lookup the patient
+            patient = patients[(model.batch_size * i) + j]
+
+            # Load their scans
+            ct = np.load(folder + '/' + patient + '/CT.npy').astype(float)
+            pet = np.load(folder + '/' + patient + '/PET.npy').astype(float)
+            mask = np.load(folder + '/' + patient + '/mask_original.npy').astype(float)
+
+            # Cut the random cubes
+            ct_final, pet_final, mask_final, half_mask, quarter_mask = cut_random_cubes(ct, pet, mask)
+
+            # Put the ct and pet into channels and append to the outside list
+            inputs.append(np.transpose([255.0 * zero_center(normalize(ct_final)), pet_final], [1, 2, 3, 0]))
+
+            # Put the labels into the appropriate list
+            labels.append([mask_final, half_mask, quarter_mask])
+
+        # Turn inputs and labels into np arrays
+        inputs = np.array(inputs)
+        labels = np.array(labels)
+
+        # Generate the loss
+        with tf.GradientTape() as tape:
+            print(inputs.shape)
+            logits1, logits2, logits3 = model.call(inputs)
+            loss = (model.loss(logits1, labels[2])/4) + (model.loss(logits2, labels[1])/2) + model.loss(logits3, labels[0])
+
+        # Backprop
         gradients = tape.gradient(loss, model.trainable_variables)
         model.optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+        print("--- Batch completed in %s seconds ---" % (time.time() - start_time))
 
 
 def test(model, test_inputs, test_labels):
@@ -325,27 +362,27 @@ def main():
     :return: None
     '''
 
-
-
+    # Initialize the model
     model = Model()
-    random = tf.random.uniform([6, 32, 32, 32, 2])
-    random1 = tf.random.uniform([6, 32, 32, 32])
 
-    array1 = tf.convert_to_tensor([[1, 0, 0], [0, 1, 0]], dtype=tf.float32)
-    array2 = tf.convert_to_tensor([[.5, .25, .25], [1, 0, 0]], dtype=tf.float32)
-    array3 = tf.convert_to_tensor([[.5, .25, .25], [0.25, .5, .25]], dtype=tf.float32)
+    # random = tf.random.uniform([6, 32, 32, 32, 2])
+    # random1 = tf.random.uniform([6, 32, 32, 32])
+    #
+    # array1 = tf.convert_to_tensor([[1, 0, 0], [0, 1, 0]], dtype=tf.float32)
+    # array2 = tf.convert_to_tensor([[.5, .25, .25], [1, 0, 0]], dtype=tf.float32)
+    # array3 = tf.convert_to_tensor([[.5, .25, .25], [0.25, .5, .25]], dtype=tf.float32)
+    #
+    # # log1, log2, log3 = model.call(tf.random.uniform([2, 32, 32, 32, 2]))
+    # # print(tf.shape(log1))
+    # # print(tf.shape(log2))
+    # # print(tf.shape(log3))
+    # print(model.loss(array1, array1))
+    # print(model.loss(array1, array2))
+    # print(model.loss(array1, array3))
+    # print(model.loss(random, random))
 
-    # log1, log2, log3 = model.call(tf.random.uniform([2, 32, 32, 32, 2]))
-    # print(tf.shape(log1))
-    # print(tf.shape(log2))
-    # print(tf.shape(log3))
-    print(model.loss(array1, array1))
-    print(model.loss(array1, array2))
-    print(model.loss(array1, array3))
-
-    print(model.loss(random, random))
-
-    train(model, random, random1)
+    # Train it
+    train(model, 'processed_data')
 
 
 
