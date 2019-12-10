@@ -4,9 +4,10 @@ import os
 import tensorflow as tf
 import tensorflow_addons as tfa
 import numpy as np
-from preprocess import cut_random_cubes, normalize, zero_center, display_ct_pet_processed
+from preprocess import cut_random_cubes, normalize, normalize_pet, zero_center, display_ct_pet_processed
 import time
 from datetime import datetime
+import math
 
 
 class Model(tf.keras.Model):
@@ -19,9 +20,9 @@ class Model(tf.keras.Model):
         """
         super(Model, self).__init__()
 
-        self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
         self.batch_size = 2
-        self.checkpoint = 1
+        self.checkpoint = 10
 
         # First convolution layer, relu, and normalization
         self.conv1 = tf.keras.layers.Conv3D(21, 3, padding='same')
@@ -116,15 +117,15 @@ class Model(tf.keras.Model):
         self.conv6_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Segmentation layer 1
-        self.seg1 = tf.keras.layers.Conv3D(1, 1, padding='same')
+        self.seg1 = tf.keras.layers.Conv3D(2, 1, padding='same')
         self.seg1_softmax = tf.keras.layers.Softmax
 
         # Segmentation layer 2
-        self.seg2 = tf.keras.layers.Conv3D(1, 1, padding='same')
+        self.seg2 = tf.keras.layers.Conv3D(2, 1, padding='same')
         self.seg2_softmax = tf.keras.layers.Softmax
 
         # Segmentation layer 3
-        self.seg3 = tf.keras.layers.Conv3D(1, 1, padding='same')
+        self.seg3 = tf.keras.layers.Conv3D(2, 1, padding='same')
         self.seg3_softmax = tf.keras.layers.Softmax
 
     def call(self, inputs):
@@ -207,34 +208,53 @@ class Model(tf.keras.Model):
         conv6_out = tf.nn.leaky_relu(self.conv6_norm(self.conv6(up4_concat)))
 
         # Segmentation layer and softmax 1
-        logits1 = tf.keras.activations.softmax(self.seg1(loc22_out), axis=[1, 2, 3])
+        logits1 = tf.keras.activations.softmax(self.seg1(loc22_out), axis=4)
 
         # Segmentation layer and softmax 1
-        logits2 = tf.keras.activations.softmax(self.seg2(loc32_out), axis=[1, 2, 3])
+        logits2 = tf.keras.activations.softmax(self.seg2(loc32_out), axis=4)
 
         # Segmentation layer and softmax 1
-        logits3 = tf.keras.activations.softmax(self.seg3(conv6_out), axis=[1, 2, 3])
+        logits3 = tf.keras.activations.softmax(self.seg3(conv6_out), axis=4)
 
         return logits1, logits2, logits3
 
     def loss(self, y_pred, y_true):
         """
         Takes in labels and logits and returns loss
-        :param y_true: labels, tensor of 1's and 0's
-        :param y_pred: logits, tensor of probabilities
+        :param y_true: labels, tensor of 1's and 0's (batch, x, y, z)
+        :param y_pred: logits, tensor of probabilities (batch, x, y, z, class)
         :return:
         """
 
-        y_true = tf.cast(tf.reshape(y_true, [tf.shape(y_true)[0], -1]), float)
-        y_pred = tf.cast(tf.reshape(y_pred, [tf.shape(y_pred)[0], -1]), float)
+        # Get tumor and background labels
+        tumor_labels = y_true
+        background_labels = y_true == 0
 
-        def dice_loss(y_true, y_pred):
-            numerator = 2 * tf.reduce_sum(y_true * y_pred, axis=1)
-            denominator = tf.reduce_sum(y_true + y_pred, axis=1)
+        # Get tumor and background logits
+        tumor_logits = y_pred[:, :, :, :, 0]
+        background_logits = y_pred[:, :, :, :, 1]
 
-            return 1 - numerator / denominator
+        # Convert to (batch, -1) size tensors
+        tumor_labels = tf.cast(tf.reshape(tumor_labels, [tf.shape(tumor_labels)[0], -1]), float)
+        background_labels = tf.cast(tf.reshape(background_labels, [tf.shape(background_labels)[0], -1]), float)
 
-        return tf.reduce_mean(tf.keras.losses.binary_crossentropy(y_true, y_pred) + dice_loss(y_true, y_pred))
+        tumor_logits = tf.cast(tf.reshape(tumor_logits, [tf.shape(tumor_logits)[0], -1]), float)
+        background_logits = tf.cast(tf.reshape(background_logits, [tf.shape(background_logits)[0], -1]), float)
+
+        # Calculate softdice loss
+        numerator_tumor = 2 * tf.reduce_sum(tumor_labels * tumor_logits, axis=1)
+        denominator_tumor = tf.reduce_sum(tumor_labels + tumor_logits, axis=1)
+
+        numerator_background = 2 * tf.reduce_sum(background_labels * background_logits, axis=1)
+        denominator_background = tf.reduce_sum(background_labels + background_logits, axis=1)
+
+        softdice_tumor_loss = tf.reduce_mean(1 - numerator_tumor / denominator_tumor)
+        softdice_background_loss = tf.reduce_mean(1 - numerator_background / denominator_background)
+
+        crossentropy_loss_tumor = tf.reduce_mean(tf.keras.losses.binary_crossentropy(tumor_labels, tumor_logits))
+        crossentropy_loss_background = tf.reduce_mean(tf.keras.losses.binary_crossentropy(background_labels, background_logits))
+
+        return softdice_tumor_loss + crossentropy_loss_tumor + softdice_background_loss + crossentropy_loss_background
 
     def accuracy(self, logits, labels):
         """
@@ -284,31 +304,33 @@ def train(model, folder, manager, start):
 
         print('Loading inputs...')
 
-        # Load the patient data and turn into cubes
-        for j in range(model.batch_size):
+        try:
+            # Load the patient data and turn into cubes
+            for j in range(model.batch_size):
 
-            # Lookup the patient
-            patient = patients[(model.batch_size * i) + j]
+                # Lookup the patient
+                patient = patients[(model.batch_size * i) + j]
+                print('Current patient: ', patient)
 
-            # Load their scans
-            ct = np.load(folder + '/' + patient + '/CT.npy').astype(float)
-            pet = np.load(folder + '/' + patient + '/PET.npy').astype(float)
-            mask = np.load(folder + '/' + patient + '/mask_original.npy').astype(float)
+                # Load their scans
+                ct = np.load(folder + '/' + patient + '/CT.npy').astype(float)
+                pet = np.load(folder + '/' + patient + '/PET.npy').astype(float)
+                mask = np.load(folder + '/' + patient + '/mask_original.npy').astype(float)
 
-            # Cut the random cubes
-            ct_final, pet_final, mask_final, half_mask, quarter_mask = cut_random_cubes(ct, pet, mask)
-            print('CT shape: ', ct_final.shape, ' || PET shape: ', pet_final.shape, ' || Mask shape: ', mask_final.shape)
+                # Cut the random cubes
+                ct_final, pet_final, mask_final, half_mask, quarter_mask = cut_random_cubes(ct, pet, mask)
+                print('CT shape: ', ct_final.shape, ' || PET shape: ', pet_final.shape, ' || Mask shape: ', mask_final.shape)
 
-            # Normalize the pet scan
-            pet_final = 255.0 * pet_final/np.sum(pet_final)
+                # Put the ct and pet into channels and append to the outside list
+                inputs.append(np.transpose([zero_center(normalize(ct_final)), pet_final/np.max(pet_final)], [1, 2, 3, 0]))
+        except:
+            print('Error loading patient data!')
+            continue
 
-            # Put the ct and pet into channels and append to the outside list
-            inputs.append(np.transpose([255.0 * zero_center(normalize(ct_final)), pet_final], [1, 2, 3, 0]))
-
-            # Put the labels into the appropriate list
-            labels1.append(mask_final)
-            labels2.append(half_mask)
-            labels3.append(quarter_mask)
+        # Put the labels into the appropriate list
+        labels1.append(mask_final)
+        labels2.append(half_mask)
+        labels3.append(quarter_mask)
 
         # Turn inputs and labels into np arrays
         inputs = np.array(inputs)
@@ -327,61 +349,28 @@ def train(model, folder, manager, start):
             loss = (model.loss(logits1, labels3)/4) + (model.loss(logits2, labels2)/2) + model.loss(logits3, labels1)
 
         print('Generating loss complete || Loss: ', loss)
-        print('Backpropagating...')
 
-        # Backprop
-        gradients = tape.gradient(loss, model.trainable_variables)
-        model.optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+        # Make sure loss is not nan
+        if not math.isnan(loss):
 
-        print('Backprop complete')
+            print('Backpropagating...')
 
-        # Save the model every checkpoint batches
-        if (i * model.batch_size) % model.checkpoint == 0:
+            # Backprop
+            gradients = tape.gradient(loss, model.trainable_variables)
+            model.optimizer.apply_gradients(zip(gradients, model.trainable_variables))
 
-            manager.save()
-            print('Model Saved!')
+            print('Backprop complete')
 
-        print("--- Batch completed in %s seconds ---" % (time.time() - start_time))
+            # Save the model every checkpoint batches
+            if (i * model.batch_size) % model.checkpoint == 0:
 
+                manager.save()
+                print('Model Saved!')
 
-def test(model, test_inputs, test_labels):
-    """
-    Tests the model on the test inputs and labels. You should NOT randomly
-    flip images or do any extra preprocessing.
-    :param test_inputs: test data (all images to be tested),
-    shape (num_inputs, width, height, num_channels)
-    :param test_labels: test labels (all corresponding labels),
-    shape (num_labels, num_classes)
-    :return: test accuracy - this can be the average accuracy across
-    all batches or the sum as long as you eventually divide it by batch_size
-    """
-
-    last_index = int(len(test_labels) / model.batch_size)
-    accuracy_ours = 0
-    accuracy = 0
-
-    for i in range(last_index):
-        print('Test Batch: ', i + 1, 'out of ', last_index)
-        temp_train = test_inputs[i * model.batch_size: (i + 1) * model.batch_size]
-        temp_labels = test_labels[i * model.batch_size: (i + 1) * model.batch_size]
-
-        accuracy_ours += model.accuracy(model.call(temp_train, True), temp_labels)
-        accuracy += model.accuracy(model.call(temp_train), temp_labels)
-
-    return accuracy_ours / last_index
-
-
-def visualize_results(ct, pet, labels, logits):
-    """
-    Displays a slice and compares the logits
-    :param ct:
-    :param pet:
-    :param labels:
-    :param logits:
-    :return:
-    """
-
-    display_ct_pet_processed(ct, pet, labels, logits)
+            print("--- Batch completed in %s seconds ---" % (time.time() - start_time))
+        else:
+            print('Skipping backprop, loss is invalid')
+            continue
 
 
 def tests(model):
@@ -414,15 +403,14 @@ def test_model(model, folder):
     # Cut the random cubes
     ct_final, pet_final, mask_final, half_mask, quarter_mask = cut_random_cubes(ct, pet, mask)
     print('CT shape: ', ct_final.shape, ' || PET shape: ', pet_final.shape, ' || Mask shape: ', mask_final.shape)
-    # Put the ct and pet into channels and append to the outside list
-    # Normalize the pet scan
-    pet_final = pet_final / np.max(pet_final)
-    # Put the ct and pet into channels and append to the outside list
-    inputs = np.array([np.transpose([zero_center(normalize(ct_final)), pet_final], [1, 2, 3, 0])])
 
+    # Put the ct and pet into channels and append to the outside list
+    inputs = np.array([np.transpose([normalize(ct_final), normalize_pet(pet_final)], [1, 2, 3, 0])])
+
+    # Call the model
     mask1, mask2, mask3 = model.call(inputs)
-    print(mask3[0,4,3,3,0])
 
+    # Display them
     display_ct_pet_processed(ct_final, pet_final, mask_final, mask3[0, :, :, :, 0])
 
 
@@ -445,18 +433,25 @@ def main():
     checkpoint_dir = './checkpoints'
     checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
     checkpoint = tf.train.Checkpoint(model=model)
-    manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=3)
+    manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=80)
+
+    print(manager.checkpoints)
+    print(manager.latest_checkpoint)
 
     # Restore latest checkpoint
     checkpoint.restore(manager.latest_checkpoint)
 
     # Train it
     train(model, '/media/user1/WD750/processed_data', manager, 0)
+    for i in range(10):
+        train(model, '/media/user1/WD750/processed_data', manager, 0)
     manager.save()
 
     # Test it
-    for i in range(1, 100):
-        test_model(model, '/media/user1/WD750/processed_data/Lung-VA-00' + str(i))
+    patients = sorted(os.listdir('/media/user1/WD750/processed_data/'))
+    for patient in patients:
+        print('Current patient: ', patient)
+        test_model(model, '/media/user1/WD750/processed_data/' + patient)
 
 
 if __name__ == '__main__':

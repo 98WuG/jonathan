@@ -245,6 +245,18 @@ def normalize(image, min_bound=-1000.0, max_bound=400.0):
     image[image < 0] = 0.
     return image
 
+def normalize_pet(image):
+    """
+    This normalizes the pixels between 0.0 and 1.0, where there is a min and max bound which cuts it off. This is
+    useful for getting rid of bones in CT scans essentially.
+    :param image: 3d np array
+    :param min_bound: minimum value
+    :param max_bound: maximum value
+    :return: normalized image
+    """
+
+    return image/np.max(image)
+
 
 def zero_center(image, pixel_mean=0.25):
     """
@@ -421,17 +433,16 @@ def display_ct_pet_processed(ct, pet, seg, seg1):
 
     # Find where the tumor is
     image_index = np.unravel_index(np.argmax(seg), seg.shape)[0] + 5
-    print('Z index: ', image_index)
 
     # Plot all of them
-    plt.subplot(2, 2, 3)
+    plt.subplot(2, 2, 1)
     plt.imshow(
         np.transpose([4 * pet[image_index] / np.max(pet), seg[image_index], normalize(ct[image_index]) / 2.5],
                      [1, 2, 0]))
-    plt.subplot(2, 2, 1)
-    plt.imshow(ct[image_index], cmap=plt.cm.gray)
     plt.subplot(2, 2, 2)
-    plt.imshow(pet[image_index], cmap=plt.cm.gray)
+    plt.imshow(normalize(ct[image_index]), cmap=plt.cm.gray)
+    plt.subplot(2, 2, 3)
+    plt.imshow(pet[image_index]/np.max(pet), cmap=plt.cm.gray)
     plt.subplot(2, 2, 4)
     plt.imshow(seg1[image_index], cmap=plt.cm.gray)
     plt.show()
