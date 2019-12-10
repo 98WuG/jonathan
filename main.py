@@ -1,13 +1,12 @@
 from __future__ import absolute_import
-from matplotlib import pyplot as plt
-# from preprocess import get_data
 
 import os
 import tensorflow as tf
+import tensorflow_addons as tfa
 import numpy as np
-import random
-from preprocess import cut_random_cubes, normalize, zero_center
+from preprocess import cut_random_cubes, normalize, zero_center, display_ct_pet_processed
 import time
+from datetime import datetime
 
 
 class Model(tf.keras.Model):
@@ -21,99 +20,100 @@ class Model(tf.keras.Model):
         super(Model, self).__init__()
 
         self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
-        self.batch_size = 1
+        self.batch_size = 2
+        self.checkpoint = 1
 
         # First convolution layer, relu, and normalization
         self.conv1 = tf.keras.layers.Conv3D(21, 3, padding='same')
-        self.conv1_norm = tf.keras.layers.BatchNormalization()
+        self.conv1_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # First residual block
         self.res11 = tf.keras.layers.Conv3D(21, 3, padding='same')
-        self.res11_norm = tf.keras.layers.BatchNormalization()
+        self.res11_norm = tfa.layers.normalizations.InstanceNormalization()
         self.res12 = tf.keras.layers.Conv3D(21, 3, padding='same')
-        self.res12_norm = tf.keras.layers.BatchNormalization()
+        self.res12_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Second convolution layer, stride 2
         self.conv2 = tf.keras.layers.Conv3D(42, 3, strides=(2, 2, 2), padding='same')
-        self.conv2_norm = tf.keras.layers.BatchNormalization()
+        self.conv2_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Second residual block
         self.res21 = tf.keras.layers.Conv3D(42, 3, padding='same')
-        self.res21_norm = tf.keras.layers.BatchNormalization()
+        self.res21_norm = tfa.layers.normalizations.InstanceNormalization()
         self.res22 = tf.keras.layers.Conv3D(42, 3, padding='same')
-        self.res22_norm = tf.keras.layers.BatchNormalization()
+        self.res22_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Third convolution layer, stride 2
         self.conv3 = tf.keras.layers.Conv3D(84, 3, strides=(2, 2, 2), padding='same')
-        self.conv3_norm = tf.keras.layers.BatchNormalization()
+        self.conv3_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Third residual block
         self.res31 = tf.keras.layers.Conv3D(84, 3, padding='same')
-        self.res31_norm = tf.keras.layers.BatchNormalization()
+        self.res31_norm = tfa.layers.normalizations.InstanceNormalization()
         self.res32 = tf.keras.layers.Conv3D(84, 3, padding='same')
-        self.res32_norm = tf.keras.layers.BatchNormalization()
+        self.res32_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Fourth convolution layer, stride 2
         self.conv4 = tf.keras.layers.Conv3D(168, 3, strides=(2, 2, 2), padding='same')
-        self.conv4_norm = tf.keras.layers.BatchNormalization()
+        self.conv4_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Fourth residual block
         self.res41 = tf.keras.layers.Conv3D(168, 3, padding='same')
-        self.res41_norm = tf.keras.layers.BatchNormalization()
+        self.res41_norm = tfa.layers.normalizations.InstanceNormalization()
         self.res42 = tf.keras.layers.Conv3D(168, 3, padding='same')
-        self.res42_norm = tf.keras.layers.BatchNormalization()
+        self.res42_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Fifth convolution layer, stride 2
         self.conv5 = tf.keras.layers.Conv3D(336, 3, strides=(2, 2, 2), padding='same')
-        self.conv5_norm = tf.keras.layers.BatchNormalization()
+        self.conv5_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Fifth residual block
         self.res51 = tf.keras.layers.Conv3D(336, 3, padding='same')
-        self.res51_norm = tf.keras.layers.BatchNormalization()
+        self.res51_norm = tfa.layers.normalizations.InstanceNormalization()
         self.res52 = tf.keras.layers.Conv3D(336, 3, padding='same')
-        self.res52_norm = tf.keras.layers.BatchNormalization()
+        self.res52_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # First upsample block
         self.up1_upsample = tf.keras.layers.UpSampling3D(2)
         self.up1 = tf.keras.layers.Conv3D(168, 3, padding='same')
-        self.up1_norm = tf.keras.layers.BatchNormalization()
+        self.up1_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # First localization module
         self.loc11 = tf.keras.layers.Conv3D(336, 3, padding='same')
-        self.loc11_norm = tf.keras.layers.BatchNormalization()
+        self.loc11_norm = tfa.layers.normalizations.InstanceNormalization()
         self.loc12 = tf.keras.layers.Conv3D(168, 1, padding='same')
-        self.loc12_norm = tf.keras.layers.BatchNormalization()
+        self.loc12_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Second upsample block
         self.up2_upsample = tf.keras.layers.UpSampling3D(2)
         self.up2 = tf.keras.layers.Conv3D(84, 3, padding='same')
-        self.up2_norm = tf.keras.layers.BatchNormalization()
+        self.up2_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Second localization module
         self.loc21 = tf.keras.layers.Conv3D(168, 3, padding='same')
-        self.loc21_norm = tf.keras.layers.BatchNormalization()
+        self.loc21_norm = tfa.layers.normalizations.InstanceNormalization()
         self.loc22 = tf.keras.layers.Conv3D(84, 1, padding='same')
-        self.loc22_norm = tf.keras.layers.BatchNormalization()
+        self.loc22_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Third upsample block
         self.up3_upsample = tf.keras.layers.UpSampling3D(2)
         self.up3 = tf.keras.layers.Conv3D(42, 3, padding='same')
-        self.up3_norm = tf.keras.layers.BatchNormalization()
+        self.up3_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Third localization module
         self.loc31 = tf.keras.layers.Conv3D(84, 3, padding='same')
-        self.loc31_norm = tf.keras.layers.BatchNormalization()
+        self.loc31_norm = tfa.layers.normalizations.InstanceNormalization()
         self.loc32 = tf.keras.layers.Conv3D(42, 1, padding='same')
-        self.loc32_norm = tf.keras.layers.BatchNormalization()
+        self.loc32_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Fourth upsample block
         self.up4_upsample = tf.keras.layers.UpSampling3D(2)
         self.up4 = tf.keras.layers.Conv3D(21, 3, padding='same')
-        self.up4_norm = tf.keras.layers.BatchNormalization()
+        self.up4_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Last convolution layer
         self.conv6 = tf.keras.layers.Conv3D(42, 3, padding='same')
-        self.conv6_norm = tf.keras.layers.BatchNormalization()
+        self.conv6_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Segmentation layer 1
         self.seg1 = tf.keras.layers.Conv3D(1, 1, padding='same')
@@ -217,15 +217,16 @@ class Model(tf.keras.Model):
 
         return logits1, logits2, logits3
 
-    def loss(self, y_true, y_pred):
+    def loss(self, y_pred, y_true):
         """
         Takes in labels and logits and returns loss
         :param y_true: labels, tensor of 1's and 0's
         :param y_pred: logits, tensor of probabilities
         :return:
         """
-        y_true = tf.reshape(y_true, [tf.shape(y_true)[0], -1])
-        y_pred = tf.reshape(y_pred, [tf.shape(y_pred)[0], -1])
+
+        y_true = tf.cast(tf.reshape(y_true, [tf.shape(y_true)[0], -1]), float)
+        y_pred = tf.cast(tf.reshape(y_pred, [tf.shape(y_pred)[0], -1]), float)
 
         def dice_loss(y_true, y_pred):
             numerator = 2 * tf.reduce_sum(y_true * y_pred, axis=1)
@@ -251,13 +252,17 @@ class Model(tf.keras.Model):
         return tf.reduce_mean(tf.cast(correct_predictions, tf.float32))
 
 
-def train(model, folder):
+def train(model, folder, manager, start):
     """
     This trains the model using the data from the given folder and the given model
     :param model:
     :param folder:
     :return:
     """
+
+    # Get the date and time in a string
+    now = datetime.now()
+    dt_string = now.strftime("%d.%m.%Y_%H.%M")
 
     # Get the list of folders in patients
     patients = sorted(os.listdir(folder))
@@ -266,13 +271,18 @@ def train(model, folder):
     last_index = int(len(patients)/model.batch_size)
 
     # Loop through every batch
-    for i in range(last_index):
+    for i in range(start, last_index):
+
         print('Train Batch: ', i + 1, 'out of ', last_index)
         start_time = time.time()
 
         # These store the inputs and labels of the batch
         inputs = []
-        labels = []
+        labels1 = []
+        labels2 = []
+        labels3 = []
+
+        print('Loading inputs...')
 
         # Load the patient data and turn into cubes
         for j in range(model.batch_size):
@@ -287,26 +297,50 @@ def train(model, folder):
 
             # Cut the random cubes
             ct_final, pet_final, mask_final, half_mask, quarter_mask = cut_random_cubes(ct, pet, mask)
+            print('CT shape: ', ct_final.shape, ' || PET shape: ', pet_final.shape, ' || Mask shape: ', mask_final.shape)
+
+            # Normalize the pet scan
+            pet_final = 255.0 * pet_final/np.sum(pet_final)
 
             # Put the ct and pet into channels and append to the outside list
             inputs.append(np.transpose([255.0 * zero_center(normalize(ct_final)), pet_final], [1, 2, 3, 0]))
 
             # Put the labels into the appropriate list
-            labels.append([mask_final, half_mask, quarter_mask])
+            labels1.append(mask_final)
+            labels2.append(half_mask)
+            labels3.append(quarter_mask)
 
         # Turn inputs and labels into np arrays
         inputs = np.array(inputs)
-        labels = np.array(labels)
+        labels1 = np.array(labels1)
+        labels2 = np.array(labels2)
+        labels3 = np.array(labels3)
+
+        print('Loading inputs complete')
+        print('Calling and generating loss...')
 
         # Generate the loss
         with tf.GradientTape() as tape:
-            print(inputs.shape)
+            # print(inputs.shape)
+            # print(labels.shape)
             logits1, logits2, logits3 = model.call(inputs)
-            loss = (model.loss(logits1, labels[2])/4) + (model.loss(logits2, labels[1])/2) + model.loss(logits3, labels[0])
+            loss = (model.loss(logits1, labels3)/4) + (model.loss(logits2, labels2)/2) + model.loss(logits3, labels1)
+
+        print('Generating loss complete || Loss: ', loss)
+        print('Backpropagating...')
 
         # Backprop
         gradients = tape.gradient(loss, model.trainable_variables)
         model.optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+
+        print('Backprop complete')
+
+        # Save the model every checkpoint batches
+        if (i * model.batch_size) % model.checkpoint == 0:
+
+            manager.save()
+            print('Model Saved!')
+
         print("--- Batch completed in %s seconds ---" % (time.time() - start_time))
 
 
@@ -337,20 +371,59 @@ def test(model, test_inputs, test_labels):
     return accuracy_ours / last_index
 
 
-def visualize_results(image_inputs, probabilities, image_labels, first_label, second_label):
+def visualize_results(ct, pet, labels, logits):
     """
-    Uses Matplotlib to visualize the results of our model.
-    :param image_inputs: image data from get_data(), limited to 10 images, shape (10, 32, 32, 3)
-    :param probabilities: the output of model.call(), shape (10, num_classes)
-    :param image_labels: the labels from get_data(), shape (10, num_classes)
-    :param first_label: the name of the first class, "dog"
-    :param second_label: the name of the second class, "cat"
-
-    NOTE: DO NOT EDIT
-
-    :return: doesn't return anything, a plot should pop-up
+    Displays a slice and compares the logits
+    :param ct:
+    :param pet:
+    :param labels:
+    :param logits:
+    :return:
     """
 
+    display_ct_pet_processed(ct, pet, labels, logits)
+
+
+def tests(model):
+    random = tf.random.uniform([6, 32, 32, 32, 2])
+    random1 = tf.random.uniform([6, 32, 32, 32])
+
+    array1 = tf.convert_to_tensor([[1, 0, 0], [0, 1, 0]], dtype=tf.float16)
+    array2 = tf.convert_to_tensor([[.5, .25, .25], [1, 0, 0]], dtype=tf.float16)
+    array3 = tf.convert_to_tensor([[.5, .25, .25], [0.25, .5, .25]], dtype=tf.float16)
+
+    input_data = tf.random.uniform([2, 32, 32, 32, 2])
+    log1, log2, log3 = model.call(input_data)
+
+    print(tf.shape(log1))
+    print(tf.shape(log2))
+    print(tf.shape(log3))
+    print(model.loss(array1, array1))
+    print(model.loss(array1, array2))
+    print(model.loss(array1, array3))
+    print(model.loss(random, random))
+
+
+def test_model(model, folder):
+
+    # Load their scans
+    ct = np.load(folder + '/CT.npy').astype(float)
+    pet = np.load(folder + '/PET.npy').astype(float)
+    mask = np.load(folder + '/mask_original.npy').astype(float)
+
+    # Cut the random cubes
+    ct_final, pet_final, mask_final, half_mask, quarter_mask = cut_random_cubes(ct, pet, mask)
+    print('CT shape: ', ct_final.shape, ' || PET shape: ', pet_final.shape, ' || Mask shape: ', mask_final.shape)
+    # Put the ct and pet into channels and append to the outside list
+    # Normalize the pet scan
+    pet_final = pet_final / np.max(pet_final)
+    # Put the ct and pet into channels and append to the outside list
+    inputs = np.array([np.transpose([zero_center(normalize(ct_final)), pet_final], [1, 2, 3, 0])])
+
+    mask1, mask2, mask3 = model.call(inputs)
+    print(mask3[0,4,3,3,0])
+
+    display_ct_pet_processed(ct_final, pet_final, mask_final, mask3[0, :, :, :, 0])
 
 
 def main():
@@ -362,33 +435,28 @@ def main():
     :return: None
     '''
 
+    # Use the titan
+    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
     # Initialize the model
     model = Model()
 
-    # random = tf.random.uniform([6, 32, 32, 32, 2])
-    # random1 = tf.random.uniform([6, 32, 32, 32])
-    #
-    # array1 = tf.convert_to_tensor([[1, 0, 0], [0, 1, 0]], dtype=tf.float32)
-    # array2 = tf.convert_to_tensor([[.5, .25, .25], [1, 0, 0]], dtype=tf.float32)
-    # array3 = tf.convert_to_tensor([[.5, .25, .25], [0.25, .5, .25]], dtype=tf.float32)
-    #
-    # # log1, log2, log3 = model.call(tf.random.uniform([2, 32, 32, 32, 2]))
-    # # print(tf.shape(log1))
-    # # print(tf.shape(log2))
-    # # print(tf.shape(log3))
-    # print(model.loss(array1, array1))
-    # print(model.loss(array1, array2))
-    # print(model.loss(array1, array3))
-    # print(model.loss(random, random))
+    # For saving/loading models
+    checkpoint_dir = './checkpoints'
+    checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
+    checkpoint = tf.train.Checkpoint(model=model)
+    manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=3)
+
+    # Restore latest checkpoint
+    checkpoint.restore(manager.latest_checkpoint)
 
     # Train it
-    train(model, 'processed_data')
+    train(model, '/media/user1/WD750/processed_data', manager, 0)
+    manager.save()
 
-
-
-
-
-
+    # Test it
+    for i in range(1, 100):
+        test_model(model, '/media/user1/WD750/processed_data/Lung-VA-00' + str(i))
 
 
 if __name__ == '__main__':

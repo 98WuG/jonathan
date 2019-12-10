@@ -364,6 +364,7 @@ def get_mask_bounds(mask):
 
     return [x_low, y_low, z_low], [x_up, y_up, z_up]
 
+
 def cut_random_cubes(ct, pet, mask):
     """
     This cuts random 128x128x128 cubes that include the tumor
@@ -385,11 +386,7 @@ def cut_random_cubes(ct, pet, mask):
 
     # Check if the tumor can be put inside with padding of at least 12
     if np.any(difference > 104):
-        too_big = True
         print('Tumor too big')
-        return
-    else:
-        too_big = False
 
     # This is the index with the tumor right in the corner with 12 padding
     temp_index = np.array(low) - 12
@@ -423,7 +420,7 @@ def display_ct_pet_processed(ct, pet, seg, seg1):
     print("CT shape: ", ct.shape, " || Pet shape: ", pet.shape, " || Seg shape: ", seg.shape, " || Seg1 shape: ", seg1.shape)
 
     # Find where the tumor is
-    image_index = np.unravel_index(np.argmax(seg), seg.shape)[0] + 10
+    image_index = np.unravel_index(np.argmax(seg), seg.shape)[0] + 5
     print('Z index: ', image_index)
 
     # Plot all of them
@@ -436,7 +433,7 @@ def display_ct_pet_processed(ct, pet, seg, seg1):
     plt.subplot(2, 2, 2)
     plt.imshow(pet[image_index], cmap=plt.cm.gray)
     plt.subplot(2, 2, 4)
-    plt.imshow(seg1[int(image_index/4)], cmap=plt.cm.gray)
+    plt.imshow(seg1[image_index], cmap=plt.cm.gray)
     plt.show()
 
 
