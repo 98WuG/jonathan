@@ -4,10 +4,12 @@ import os
 import tensorflow as tf
 import tensorflow_addons as tfa
 import numpy as np
-from preprocess import cut_random_cubes, normalize, normalize_pet, zero_center, display_ct_pet_processed
+from preprocess import cut_random_cubes, normalize, normalize_pet, zero_center, display_ct_pet_processed, display_ct_pet_processed_test
 import time
 from datetime import datetime
 import math
+import threading
+import matplotlib.pyplot as plt
 
 
 class Model(tf.keras.Model):
@@ -22,7 +24,7 @@ class Model(tf.keras.Model):
 
         self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
         self.batch_size = 2
-        self.checkpoint = 10
+        self.checkpoint = 1
 
         # First convolution layer, relu, and normalization
         self.conv1 = tf.keras.layers.Conv3D(21, 3, padding='same')
@@ -225,10 +227,9 @@ class Model(tf.keras.Model):
         :param y_pred: logits, tensor of probabilities (batch, x, y, z, class)
         :return:
         """
-
         # Get tumor and background labels
         tumor_labels = y_true
-        background_labels = y_true == 0
+        background_labels = 1 - y_true
 
         # Get tumor and background logits
         tumor_logits = y_pred[:, :, :, :, 0]
@@ -251,10 +252,26 @@ class Model(tf.keras.Model):
         softdice_tumor_loss = tf.reduce_mean(1 - numerator_tumor / denominator_tumor)
         softdice_background_loss = tf.reduce_mean(1 - numerator_background / denominator_background)
 
-        crossentropy_loss_tumor = tf.reduce_mean(tf.keras.losses.binary_crossentropy(tumor_labels, tumor_logits))
-        crossentropy_loss_background = tf.reduce_mean(tf.keras.losses.binary_crossentropy(background_labels, background_logits))
+        # # Calculate weighted binary cross-entropy
+        # one_weight = tf.reduce_mean(tumor_labels)
+        # zero_weight = 1 - one_weight
+        #
+        # weighted_tumor_labels = tumor_labels / one_weight
+        # weighted_background_labels = background_labels / zero_weight
+        #
+        # tumor_voxels = tf.reduce_sum(tumor_labels)
+        # background_voxels = tf.reduce_sum(background_labels)
+        #
+        # tumor_loss = tf.reduce_sum(weighted_tumor_labels * tf.math.log(tumor_logits))/tumor_voxels
+        # background_loss = tf.reduce_sum(weighted_background_labels * tf.math.log(background_logits))/background_voxels
+        #
+        # Calculate crossentropy loss
+        # crossentropy_loss_tumor = tf.reduce_mean(tf.keras.losses.binary_crossentropy(tumor_labels, tumor_logits))
+        # crossentropy_loss_background = tf.reduce_mean(tf.keras.losses.binary_crossentropy(background_labels, background_logits))
 
-        return softdice_tumor_loss + crossentropy_loss_tumor + softdice_background_loss + crossentropy_loss_background
+        return softdice_tumor_loss
+
+
 
     def accuracy(self, logits, labels):
         """
@@ -272,7 +289,9 @@ class Model(tf.keras.Model):
         return tf.reduce_mean(tf.cast(correct_predictions, tf.float32))
 
 
-def train(model, folder, manager, start):
+
+
+def train(model, folder, manager, start, save_dir):
     """
     This trains the model using the data from the given folder and the given model
     :param model:
@@ -289,6 +308,9 @@ def train(model, folder, manager, start):
 
     # Find the last index given the patients and batch_size
     last_index = int(len(patients)/model.batch_size)
+
+    # Loss
+    loss_list = []
 
     # Loop through every batch
     for i in range(start, last_index):
@@ -322,21 +344,22 @@ def train(model, folder, manager, start):
                 print('CT shape: ', ct_final.shape, ' || PET shape: ', pet_final.shape, ' || Mask shape: ', mask_final.shape)
 
                 # Put the ct and pet into channels and append to the outside list
-                inputs.append(np.transpose([zero_center(normalize(ct_final)), pet_final/np.max(pet_final)], [1, 2, 3, 0]))
+                inputs.append(np.transpose([(normalize(ct_final)), normalize_pet(pet_final)], [1, 2, 3, 0]))
+
+                # Put the labels into the appropriate list
+                labels1.append(mask_final)
+                labels2.append(half_mask)
+                labels3.append(quarter_mask)
+
+            # Turn inputs and labels into np arrays
+            inputs = np.array(inputs)
+            labels1 = np.array(labels1)
+            labels2 = np.array(labels2)
+            labels3 = np.array(labels3)
         except:
             print('Error loading patient data!')
             continue
 
-        # Put the labels into the appropriate list
-        labels1.append(mask_final)
-        labels2.append(half_mask)
-        labels3.append(quarter_mask)
-
-        # Turn inputs and labels into np arrays
-        inputs = np.array(inputs)
-        labels1 = np.array(labels1)
-        labels2 = np.array(labels2)
-        labels3 = np.array(labels3)
 
         print('Loading inputs complete')
         print('Calling and generating loss...')
@@ -354,10 +377,11 @@ def train(model, folder, manager, start):
         if not math.isnan(loss):
 
             print('Backpropagating...')
-
             # Backprop
             gradients = tape.gradient(loss, model.trainable_variables)
             model.optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+
+
 
             print('Backprop complete')
 
@@ -366,11 +390,17 @@ def train(model, folder, manager, start):
 
                 manager.save()
                 print('Model Saved!')
+                loss_list.append(loss)
+                np.save(save_dir + '/loss', loss_list)
+                # Test it
+                display_ct_pet_processed(inputs, labels1, logits3)
 
             print("--- Batch completed in %s seconds ---" % (time.time() - start_time))
         else:
             print('Skipping backprop, loss is invalid')
             continue
+
+
 
 
 def tests(model):
@@ -379,7 +409,7 @@ def tests(model):
 
     array1 = tf.convert_to_tensor([[1, 0, 0], [0, 1, 0]], dtype=tf.float16)
     array2 = tf.convert_to_tensor([[.5, .25, .25], [1, 0, 0]], dtype=tf.float16)
-    array3 = tf.convert_to_tensor([[.5, .25, .25], [0.25, .5, .25]], dtype=tf.float16)
+    array3 = tf.convert_to_tensor([[.5, .25, .25], [0.25, .5, .25]], dtype=mask_finaltf.float16)
 
     input_data = tf.random.uniform([2, 32, 32, 32, 2])
     log1, log2, log3 = model.call(input_data)
@@ -405,13 +435,32 @@ def test_model(model, folder):
     print('CT shape: ', ct_final.shape, ' || PET shape: ', pet_final.shape, ' || Mask shape: ', mask_final.shape)
 
     # Put the ct and pet into channels and append to the outside list
-    inputs = np.array([np.transpose([normalize(ct_final), normalize_pet(pet_final)], [1, 2, 3, 0])])
+    inputs = np.array([np.transpose([(normalize(ct_final)), normalize_pet(pet_final)], [1, 2, 3, 0])])
 
     # Call the model
     mask1, mask2, mask3 = model.call(inputs)
 
+    inputs = []
+    labels1 = []
+    labels2 = []
+    labels3 = []
+
+    # Put the labels into the appropriate list
+    inputs.append(np.transpose([(normalize(ct_final)), normalize_pet(pet_final)], [1, 2, 3, 0]))
+    labels1.append(mask_final)
+    labels2.append(half_mask)
+    labels3.append(quarter_mask)
+
+    # Turn inputs and labels into np arrays
+    inputs = np.array(inputs)
+    labels1 = np.array(labels1)
+    labels2 = np.array(labels2)
+    labels3 = np.array(labels3)
+
+    loss = (model.loss(mask1, labels3) / 4) + (model.loss(mask2, labels2) / 2) + model.loss(mask3, labels1)
+    print('Loss: ', loss)
     # Display them
-    display_ct_pet_processed(ct_final, pet_final, mask_final, mask3[0, :, :, :, 0])
+    display_ct_pet_processed_test(inputs, labels1, mask3)
 
 
 def main():
@@ -430,7 +479,7 @@ def main():
     model = Model()
 
     # For saving/loading models
-    checkpoint_dir = './checkpoints'
+    checkpoint_dir = './checkpoints_data2'
     checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
     checkpoint = tf.train.Checkpoint(model=model)
     manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=80)
@@ -439,19 +488,28 @@ def main():
     print(manager.latest_checkpoint)
 
     # Restore latest checkpoint
+    # checkpoint.restore('./checkpoints_data/ckpt-672')
     checkpoint.restore(manager.latest_checkpoint)
 
     # Train it
-    train(model, '/media/user1/WD750/processed_data', manager, 0)
-    for i in range(10):
-        train(model, '/media/user1/WD750/processed_data', manager, 0)
-    manager.save()
+    # train(model, './processed_data', manager, 0, checkpoint_dir)
+    # for i in range(10):
+    #     train(model, './processed_data', manager, 0, checkpoint_dir)
+    # manager.save()
+
+    # Graph loss
+    fig = plt.figure()
+    ax = plt.axes()
+    loss_graph = np.load(checkpoint_dir + '/loss.npy')
+    x = np.linspace(0, 1, len(loss_graph))
+    ax.plot(x, loss_graph)
+    plt.show()
 
     # Test it
-    patients = sorted(os.listdir('/media/user1/WD750/processed_data/'))
+    patients = sorted(os.listdir('./processed_data/'))
     for patient in patients:
         print('Current patient: ', patient)
-        test_model(model, '/media/user1/WD750/processed_data/' + patient)
+        test_model(model, './processed_data/' + patient)
 
 
 if __name__ == '__main__':
