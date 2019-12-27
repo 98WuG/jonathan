@@ -11,4 +11,6 @@ slicer_database
 venv
 GAN
 checkpoints
+*.aux
+*.log
 checkpoints1
