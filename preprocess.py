@@ -257,7 +257,7 @@ def normalize_pet(image):
     """
 
     temp = image / np.max(image)
-    negatives = temp < 0
+    negatives = temp < 0.001
     temp[negatives] = 1
     return temp
 
@@ -401,8 +401,11 @@ def cut_random_cubes(ct, pet, mask):
     difference = high - low
 
     # Check if the tumor can be put inside with padding of at least 12
-    if np.any(difference > 104):
+    if np.any(difference > 30):
         print('Tumor too big')
+        nodule = False
+    else:
+        nodule = True
 
     # This is the index with the tumor right in the corner with 12 padding
     temp_index = np.array(low) - 12
@@ -423,7 +426,7 @@ def cut_random_cubes(ct, pet, mask):
     mask2, spacing = resample_mask(final_mask, [2, 2, 2])
     mask3, spacing = resample_mask(final_mask, [4, 4, 4])
 
-    return final_ct, final_pet, final_mask, mask2, mask3
+    return final_ct, final_pet, final_mask, mask2, mask3, nodule
 
 
 def display_ct_pet_processed(input, seg, logits):
@@ -482,7 +485,7 @@ def display_ct_pet_processed_test(input, seg, logits):
     :return: none
     """
     plt.close('all')
-    print("Input shape: ", input.shape, " || Seg shape: ", seg.shape, " || Logits shape: ", logits.shape)
+    # print("Input shape: ", input.shape, " || Seg shape: ", seg.shape, " || Logits shape: ", logits.shape)
 
     # Find where the tumor is
     image_index1 = np.unravel_index(np.argmax(seg[0]), seg[0].shape)[0] + 5
