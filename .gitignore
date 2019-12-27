@@ -9,3 +9,8 @@ slicer_database
 *.docx
 *.npy
 venv
+GAN
+checkpoints
+*.aux
+*.log
+checkpoints1

@@ -1,14 +1,5 @@
-from __future__ import absolute_import
-
-import os
 import tensorflow as tf
 import tensorflow_addons as tfa
-import numpy as np
-import random
-from preprocess import cut_random_cubes, normalize, zero_center, display_ct_pet_processed
-import time
-from datetime import datetime
-
 
 class Model(tf.keras.Model):
     def __init__(self):
@@ -20,9 +11,9 @@ class Model(tf.keras.Model):
         """
         super(Model, self).__init__()
 
-        self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
-        self.batch_size = 1
-        self.checkpoint = 5
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
+        self.batch_size = 2
+        self.checkpoint = 1
 
         # First convolution layer, relu, and normalization
         self.conv1 = tf.keras.layers.Conv3D(21, 3, padding='same')
@@ -117,15 +108,15 @@ class Model(tf.keras.Model):
         self.conv6_norm = tfa.layers.normalizations.InstanceNormalization()
 
         # Segmentation layer 1
-        self.seg1 = tf.keras.layers.Conv3D(1, 1, padding='same')
+        self.seg1 = tf.keras.layers.Conv3D(2, 1, padding='same')
         self.seg1_softmax = tf.keras.layers.Softmax
 
         # Segmentation layer 2
-        self.seg2 = tf.keras.layers.Conv3D(1, 1, padding='same')
+        self.seg2 = tf.keras.layers.Conv3D(2, 1, padding='same')
         self.seg2_softmax = tf.keras.layers.Softmax
 
         # Segmentation layer 3
-        self.seg3 = tf.keras.layers.Conv3D(1, 1, padding='same')
+        self.seg3 = tf.keras.layers.Conv3D(2, 1, padding='same')
         self.seg3_softmax = tf.keras.layers.Softmax
 
     def call(self, inputs):
@@ -140,41 +131,33 @@ class Model(tf.keras.Model):
         conv1_out = tf.nn.leaky_relu(self.conv1_norm(self.conv1(inputs)))
 
         res11_out = tf.nn.leaky_relu(self.res11_norm(self.res11(conv1_out)))
-        res12_out = tf.nn.leaky_relu(self.res12_norm(self.res12(res11_out)))
-
-        layer1_out = conv1_out + res12_out
+        layer1_out = tf.nn.leaky_relu(self.res12_norm(self.res12(res11_out)) + conv1_out)
 
         # Second layer
         conv2_out = tf.nn.leaky_relu(self.conv2_norm(self.conv2(layer1_out)))
 
         res21_out = tf.nn.leaky_relu(self.res21_norm(self.res21(conv2_out)))
-        res22_out = tf.nn.leaky_relu(self.res22_norm(self.res22(res21_out)))
+        layer2_out = tf.nn.leaky_relu(self.res22_norm(self.res22(res21_out)) + conv2_out)
 
-        layer2_out = conv2_out + res22_out
 
         # Third layer
         conv3_out = tf.nn.leaky_relu(self.conv3_norm(self.conv3(layer2_out)))
 
         res31_out = tf.nn.leaky_relu(self.res31_norm(self.res31(conv3_out)))
-        res32_out = tf.nn.leaky_relu(self.res32_norm(self.res32(res31_out)))
-
-        layer3_out = conv3_out + res32_out
+        layer3_out = tf.nn.leaky_relu(self.res32_norm(self.res32(res31_out)) + conv3_out)
 
         # Fourth layer
         conv4_out = tf.nn.leaky_relu(self.conv4_norm(self.conv4(layer3_out)))
 
         res41_out = tf.nn.leaky_relu(self.res41_norm(self.res41(conv4_out)))
-        res42_out = tf.nn.leaky_relu(self.res42_norm(self.res42(res41_out)))
+        layer4_out = tf.nn.leaky_relu(self.res42_norm(self.res42(res41_out)) + conv4_out)
 
-        layer4_out = conv4_out + res42_out
 
         # Fifth layer
         conv5_out = tf.nn.leaky_relu(self.conv5_norm(self.conv5(layer4_out)))
 
         res51_out = tf.nn.leaky_relu(self.res51_norm(self.res51(conv5_out)))
-        res52_out = tf.nn.leaky_relu(self.res52_norm(self.res52(res51_out)))
-
-        layer5_out = conv5_out + res52_out
+        layer5_out = tf.nn.leaky_relu(self.res52_norm(self.res52(res51_out)) + conv5_out)
 
         # First upsample module
         up1_out = tf.nn.leaky_relu(self.up1_norm(self.up1(self.up1_upsample(layer5_out))))
@@ -208,35 +191,62 @@ class Model(tf.keras.Model):
         conv6_out = tf.nn.leaky_relu(self.conv6_norm(self.conv6(up4_concat)))
 
         # Segmentation layer and softmax 1
-        logits1 = tf.keras.activations.softmax(self.seg1(loc22_out), axis=[1, 2, 3])
+        logits1 = tf.keras.activations.softmax(self.seg1(loc22_out), axis=4)
 
         # Segmentation layer and softmax 1
-        logits2 = tf.keras.activations.softmax(self.seg2(loc32_out), axis=[1, 2, 3])
+        logits2 = tf.keras.activations.softmax(self.seg2(loc32_out), axis=4)
 
         # Segmentation layer and softmax 1
-        logits3 = tf.keras.activations.softmax(self.seg3(conv6_out), axis=[1, 2, 3])
+        logits3 = tf.keras.activations.softmax(self.seg3(conv6_out), axis=4)
 
         return logits1, logits2, logits3
 
-    def loss(self, y_true, y_pred):
+    def loss(self, y_pred, y_true):
         """
         Takes in labels and logits and returns loss
-        :param y_true: labels, tensor of 1's and 0's
-        :param y_pred: logits, tensor of probabilities
+        :param y_true: labels, tensor of 1's and 0's (batch, x, y, z)
+        :param y_pred: logits, tensor of probabilities (batch, x, y, z, class)
         :return:
         """
-        y_true = tf.reshape(y_true, [tf.shape(y_true)[0], -1])
-        y_pred = tf.reshape(y_pred, [tf.shape(y_pred)[0], -1])
+        # Get tumor and background labels
+        tumor_labels = y_true > 0.5
+        background_labels = y_true < 0.5
 
-        def dice_loss(y_true, y_pred):
-            numerator = 2 * tf.reduce_sum(y_true * y_pred, axis=1)
-            denominator = tf.reduce_sum(y_true + y_pred, axis=1)
+        # Get tumor and background logits
+        tumor_logits = y_pred[:, :, :, :, 0]
+        background_logits = y_pred[:, :, :, :, 1]
 
-            return 1 - numerator / denominator
+        # Convert to (batch, -1) size tensors
+        tumor_labels = tf.cast(tf.reshape(tumor_labels, [tf.shape(tumor_labels)[0], -1]), float)
+        background_labels = tf.cast(tf.reshape(background_labels, [tf.shape(background_labels)[0], -1]), float)
 
-        return tf.reduce_mean(tf.keras.losses.binary_crossentropy(y_true, y_pred) + dice_loss(y_true, y_pred))
+        tumor_logits = tf.cast(tf.reshape(tumor_logits, [tf.shape(tumor_logits)[0], -1]), float)
+        background_logits = tf.cast(tf.reshape(background_logits, [tf.shape(background_logits)[0], -1]), float)
 
-    def accuracy(self, logits, labels):
+        # Calculate softdice loss
+        numerator_tumor = 2 * tf.reduce_sum(tumor_labels * tumor_logits, axis=1)
+        denominator_tumor = tf.reduce_sum(tumor_labels + tumor_logits, axis=1)
+
+        numerator_background = 2 * tf.reduce_sum(background_labels * background_logits, axis=1)
+        denominator_background = tf.reduce_sum(background_labels + background_logits, axis=1)
+
+        softdice_tumor_loss = tf.reduce_mean(1 - numerator_tumor / denominator_tumor)
+        softdice_background_loss = tf.reduce_mean(1 - numerator_background / denominator_background)
+
+        # Calculate weighted binary cross-entropy
+        tumor_voxels = tf.reduce_sum(tumor_labels)
+        background_voxels = tf.reduce_sum(background_labels)
+
+        crossentropy_loss_tumor_pre = tumor_labels * tf.math.log(tumor_logits) + background_labels * tf.math.log(1 - tumor_logits)
+
+        crossentropy_loss_tumor = (tf.reduce_sum(crossentropy_loss_tumor_pre * tumor_labels)/tumor_voxels)
+        crossentropy_loss_background = (tf.reduce_sum(crossentropy_loss_tumor_pre * background_labels)/background_voxels)
+
+        return -(crossentropy_loss_background + crossentropy_loss_tumor)
+
+
+
+    def accuracy(self, y_pred, y_true):
         """
         Calculates the model's prediction accuracy by comparing
         logits to correct labels – no need to modify this.
@@ -248,172 +258,23 @@ class Model(tf.keras.Model):
 
         :return: the accuracy of the model as a Tensor
         """
-        correct_predictions = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
-        return tf.reduce_mean(tf.cast(correct_predictions, tf.float32))
+        # Get tumor and background labels
+        tumor_labels = y_true >= 0.5
 
 
-def train(model, folder):
-    """
-    This trains the model using the data from the given folder and the given model
-    :param model:
-    :param folder:
-    :return:
-    """
+        # Get tumor and background logits
+        tumor_logits = y_pred[:, :, :, :, 0]
 
-    # Get the date and time in a string
-    now = datetime.now()
-    dt_string = now.strftime("%d.%m.%Y_%H.%M")
+        # Convert to (batch, -1) size tensors
+        tumor_labels = tf.cast(tf.reshape(tumor_labels, [tf.shape(tumor_labels)[0], -1]), float)
+        tumor_logits = tf.cast(tf.reshape(tumor_logits, [tf.shape(tumor_logits)[0], -1]), float)
 
+        # Calculate softdice loss
+        numerator_tumor = 2 * tf.reduce_sum(tumor_labels * tumor_logits, axis=1)
+        denominator_tumor = tf.reduce_sum(tumor_labels + tumor_logits, axis=1)
 
-    # Get the list of folders in patients
-    patients = sorted(os.listdir(folder))
+        softdice_tumor = tf.reduce_mean(numerator_tumor / denominator_tumor)
 
-    # Find the last index given the patients and batch_size
-    last_index = int(len(patients)/model.batch_size)
-
-    # Loop through every batch
-    for i in range(last_index):
-        print('Train Batch: ', i + 1, 'out of ', last_index)
-        start_time = time.time()
-
-        # These store the inputs and labels of the batch
-        inputs = []
-        labels = []
-
-        # Load the patient data and turn into cubes
-        for j in range(model.batch_size):
-
-            # Lookup the patient
-            patient = patients[(model.batch_size * i) + j]
-
-            # Load their scans
-            ct = np.load(folder + '/' + patient + '/CT.npy').astype(float)
-            pet = np.load(folder + '/' + patient + '/PET.npy').astype(float)
-            mask = np.load(folder + '/' + patient + '/mask_original.npy').astype(float)
-
-            # Cut the random cubes
-            ct_final, pet_final, mask_final, half_mask, quarter_mask = cut_random_cubes(ct, pet, mask)
-
-            # Put the ct and pet into channels and append to the outside list
-            inputs.append(np.transpose([255.0 * zero_center(normalize(ct_final)), pet_final], [1, 2, 3, 0]))
-
-            # Put the labels into the appropriate list
-            labels.append([mask_final, half_mask, quarter_mask])
-
-        # Turn inputs and labels into np arrays
-        inputs = np.array(inputs)
-        labels = np.array(labels)
-
-        # Generate the loss
-        with tf.GradientTape() as tape:
-            print(inputs.shape)
-            logits1, logits2, logits3 = model.call(inputs)
-            loss = (model.loss(logits1, labels[2])/4) + (model.loss(logits2, labels[1])/2) + model.loss(logits3, labels[0])
-
-        # Backprop
-        gradients = tape.gradient(loss, model.trainable_variables)
-        model.optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-
-        # Save the model every checkpoint batches
-        if (i * model.batch_size) % model.checkpoint == 0:
-
-            # Create a directory if it doesn't exist
-            if not os.path.exists('checkpoints/' + dt_string):
-                os.makedirs('checkpoints/' + dt_string)
-
-            # Create the location and save the file
-            location = 'checkpoints/' + dt_string + "/batch_" + str(i) + ".ckpt"
-            tf.keras.callbacks.ModelCheckpoint(filepath=location, save_weights_only=True)
-
-        print("--- Batch completed in %s seconds ---" % (time.time() - start_time))
+        return softdice_tumor
 
 
-def test(model, test_inputs, test_labels):
-    """
-    Tests the model on the test inputs and labels. You should NOT randomly
-    flip images or do any extra preprocessing.
-    :param test_inputs: test data (all images to be tested),
-    shape (num_inputs, width, height, num_channels)
-    :param test_labels: test labels (all corresponding labels),
-    shape (num_labels, num_classes)
-    :return: test accuracy - this can be the average accuracy across
-    all batches or the sum as long as you eventually divide it by batch_size
-    """
-
-    last_index = int(len(test_labels) / model.batch_size)
-    accuracy_ours = 0
-    accuracy = 0
-
-    for i in range(last_index):
-        print('Test Batch: ', i + 1, 'out of ', last_index)
-        temp_train = test_inputs[i * model.batch_size: (i + 1) * model.batch_size]
-        temp_labels = test_labels[i * model.batch_size: (i + 1) * model.batch_size]
-
-        accuracy_ours += model.accuracy(model.call(temp_train, True), temp_labels)
-        accuracy += model.accuracy(model.call(temp_train), temp_labels)
-
-    return accuracy_ours / last_index
-
-
-def visualize_results(ct, pet, labels, logits):
-    """
-    Displays a slice and compares the logits
-    :param ct:
-    :param pet:
-    :param labels:
-    :param logits:
-    :return:
-    """
-
-    display_ct_pet_processed(ct, pet, labels, logits)
-
-
-
-
-def main():
-    '''
-    Read in CIFAR10 data (limited to 2 classes), initialize your model, and train and
-    test your model for a number of epochs. We recommend that you train for
-    10 epochs and at most 25 epochs. For CS2470 students, you must train within 10 epochs.
-    You should receive a final accuracy on the testing examples for cat and dog of >=70%.
-    :return: None
-    '''
-
-    # Use the titan
-    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-
-    # Initialize the model
-    model = Model()
-
-    # random = tf.random.uniform([6, 32, 32, 32, 2])
-    # random1 = tf.random.uniform([6, 32, 32, 32])
-    #
-    # array1 = tf.convert_to_tensor([[1, 0, 0], [0, 1, 0]], dtype=tf.float16)
-    # array2 = tf.convert_to_tensor([[.5, .25, .25], [1, 0, 0]], dtype=tf.float16)
-    # array3 = tf.convert_to_tensor([[.5, .25, .25], [0.25, .5, .25]], dtype=tf.float16)
-    #
-    # input_data = tf.random.uniform([2, 32, 32, 32, 2])
-    # log1, log2, log3 = model.call(input_data)
-
-    # visualize_results(input_data[0, :, :, :, 0], input_data[0, :, :, :, 1], log3[0], log3[0])
-
-    # print(tf.shape(log1))
-    # print(tf.shape(log2))
-    # print(tf.shape(log3))
-    # print(model.loss(array1, array1))
-    # print(model.loss(array1, array2))
-    # print(model.loss(array1, array3))
-    # print(model.loss(random, random))
-
-    # # Train it
-    # train(model, 'processed_data')
-
-
-
-
-
-
-
-
-if __name__ == '__main__':
-    main()
