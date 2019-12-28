@@ -516,6 +516,7 @@ def display_ct_pet_processed_test(input, seg, logits):
         fig.canvas.flush_events()
         i += 1
 
+
 def display_ct_pet(folder):
     """
     This displaces the ct, pet, tumor mask, and lung mask in 2d axial view of the tumor
@@ -551,6 +552,7 @@ def display_ct_pet(folder):
     plt.subplot(2, 2, 4)
     plt.imshow(seg1[int(image_index / 4)], cmap=plt.cm.gray)
     plt.show(block=False)
+
 
 
 def main():
