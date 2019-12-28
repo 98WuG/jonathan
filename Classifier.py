@@ -14,6 +14,8 @@ class Model(tf.keras.Model):
         self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
         self.batch_size = 2
         self.checkpoint = 1
+        self.hidden_size_dem = 300
+        self.hidden_size_com = 500
 
         # First convolution layer, relu, and normalization
         self.conv1 = tf.keras.layers.Conv3D(21, 3, padding='same')
@@ -65,9 +67,17 @@ class Model(tf.keras.Model):
         self.res52 = tf.keras.layers.Conv3D(336, 3, padding='same')
         self.res52_norm = tfa.layers.normalizations.InstanceNormalization()
 
+        # Dense layer processing patient demographic data
+        self.dense1 = tf.keras.layers.Dense(self.hidden_size_dem)
+        self.dense2 = tf.keras.layers.Dense(self.hidden_size_dem)
+        self.dense3 = tf.keras.layers.Dense(self.hidden_size_dem)
 
+        # Dense layer processing demo and image data
+        self.dense4 = tf.keras.layers.Dense(self.hidden_size_com)
+        self.dense5 = tf.keras.layers.Dense(self.hidden_size_com)
+        self.dense6 = tf.keras.layers.Dense(2)
 
-    def call(self, inputs):
+    def call(self, image, demo):
         """
         Runs a forward pass on an input batch of images.
         :param inputs: images, shape of (num_inputs, 32, 32, 3); during training, the shape is (batch_size, 32, 32, 3)
@@ -76,7 +86,7 @@ class Model(tf.keras.Model):
         """
 
         # Top layer
-        conv1_out = tf.nn.leaky_relu(self.conv1_norm(self.conv1(inputs)))
+        conv1_out = tf.nn.leaky_relu(self.conv1_norm(self.conv1(image)))
 
         res11_out = tf.nn.leaky_relu(self.res11_norm(self.res11(conv1_out)))
         layer1_out = tf.nn.leaky_relu(self.res12_norm(self.res12(res11_out)) + conv1_out)
@@ -86,7 +96,6 @@ class Model(tf.keras.Model):
 
         res21_out = tf.nn.leaky_relu(self.res21_norm(self.res21(conv2_out)))
         layer2_out = tf.nn.leaky_relu(self.res22_norm(self.res22(res21_out)) + conv2_out)
-
 
         # Third layer
         conv3_out = tf.nn.leaky_relu(self.conv3_norm(self.conv3(layer2_out)))
@@ -100,66 +109,38 @@ class Model(tf.keras.Model):
         res41_out = tf.nn.leaky_relu(self.res41_norm(self.res41(conv4_out)))
         layer4_out = tf.nn.leaky_relu(self.res42_norm(self.res42(res41_out)) + conv4_out)
 
-
         # Fifth layer
         conv5_out = tf.nn.leaky_relu(self.conv5_norm(self.conv5(layer4_out)))
 
         res51_out = tf.nn.leaky_relu(self.res51_norm(self.res51(conv5_out)))
         layer5_out = tf.nn.leaky_relu(self.res52_norm(self.res52(res51_out)) + conv5_out)
 
+        # Demographic data dense layers
+        dense1_out = tf.nn.leaky_relu(self.dense1(demo))
+        dense2_out = tf.nn.leaky_relu(self.dense2(dense1_out))
+        dense3_out = tf.nn.leaky_relu(self.dense3(dense2_out))
 
+        # Combine image and patient data
+        com_input = tf.concat([tf.reshape(layer5_out, [layer5_out.shape[0], -1]), dense3_out], 1)
 
+        # Feed through other dense layers
+        dense4_out = tf.nn.leaky_relu(self.dense4(com_input))
+        dense5_out = tf.nn.leaky_relu(self.dense5(dense4_out))
+        logits = tf.nn.softmax(self.dense6(dense5_out))
 
-
-
-        return logits1, logits2, logits3
+        return logits
 
     def loss(self, y_pred, y_true):
         """
         Takes in labels and logits and returns loss
-        :param y_true: labels, tensor of 1's and 0's (batch, x, y, z)
-        :param y_pred: logits, tensor of probabilities (batch, x, y, z, class)
+        :param y_true: labels, one-hot tensor of 1's and 0's (batch, 2)
+        :param y_pred: logits, tensor of probabilities (batch, 2)
         :return:
         """
-        # Get tumor and background labels
-        tumor_labels = y_true > 0.5
-        background_labels = y_true < 0.5
 
-        # Get tumor and background logits
-        tumor_logits = y_pred[:, :, :, :, 0]
-        background_logits = y_pred[:, :, :, :, 1]
+        return tf.reduce_mean(tf.losses.binary_crossentropy(y_true, y_pred))
 
-        # Convert to (batch, -1) size tensors
-        tumor_labels = tf.cast(tf.reshape(tumor_labels, [tf.shape(tumor_labels)[0], -1]), float)
-        background_labels = tf.cast(tf.reshape(background_labels, [tf.shape(background_labels)[0], -1]), float)
-
-        tumor_logits = tf.cast(tf.reshape(tumor_logits, [tf.shape(tumor_logits)[0], -1]), float)
-        background_logits = tf.cast(tf.reshape(background_logits, [tf.shape(background_logits)[0], -1]), float)
-
-        # Calculate softdice loss
-        numerator_tumor = 2 * tf.reduce_sum(tumor_labels * tumor_logits, axis=1)
-        denominator_tumor = tf.reduce_sum(tumor_labels + tumor_logits, axis=1)
-
-        numerator_background = 2 * tf.reduce_sum(background_labels * background_logits, axis=1)
-        denominator_background = tf.reduce_sum(background_labels + background_logits, axis=1)
-
-        softdice_tumor_loss = tf.reduce_mean(1 - numerator_tumor / denominator_tumor)
-        softdice_background_loss = tf.reduce_mean(1 - numerator_background / denominator_background)
-
-        # Calculate weighted binary cross-entropy
-        tumor_voxels = tf.reduce_sum(tumor_labels)
-        background_voxels = tf.reduce_sum(background_labels)
-
-        crossentropy_loss_tumor_pre = tumor_labels * tf.math.log(tumor_logits) + background_labels * tf.math.log(1 - tumor_logits)
-
-        crossentropy_loss_tumor = (tf.reduce_sum(crossentropy_loss_tumor_pre * tumor_labels)/tumor_voxels)
-        crossentropy_loss_background = (tf.reduce_sum(crossentropy_loss_tumor_pre * background_labels)/background_voxels)
-
-        return -(crossentropy_loss_background + crossentropy_loss_tumor) + softdice_tumor_loss
-
-
-
-    def accuracy(self, y_pred, y_true):
+    def accuracy(self, logits, labels):
         """
         Calculates the model's prediction accuracy by comparing
         logits to correct labels – no need to modify this.
@@ -171,23 +152,7 @@ class Model(tf.keras.Model):
 
         :return: the accuracy of the model as a Tensor
         """
-        # Get tumor and background labels
-        tumor_labels = y_true >= 0.5
-
-
-        # Get tumor and background logits
-        tumor_logits = y_pred[:, :, :, :, 0]
-
-        # Convert to (batch, -1) size tensors
-        tumor_labels = tf.cast(tf.reshape(tumor_labels, [tf.shape(tumor_labels)[0], -1]), float)
-        tumor_logits = tf.cast(tf.reshape(tumor_logits, [tf.shape(tumor_logits)[0], -1]), float)
-
-        # Calculate softdice loss
-        numerator_tumor = 2 * tf.reduce_sum(tumor_labels * tumor_logits, axis=1)
-        denominator_tumor = tf.reduce_sum(tumor_labels + tumor_logits, axis=1)
-
-        softdice_tumor = tf.reduce_mean(numerator_tumor / denominator_tumor)
-
-        return softdice_tumor
+        correct_predictions = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
+        return tf.reduce_mean(tf.cast(correct_predictions, tf.float32))
 
 
