@@ -9,6 +9,7 @@ import nrrd
 import time
 # import raster_geometry as mrt
 import threading
+import pandas as pd
 
 
 def load_scan(path):
@@ -553,21 +554,33 @@ def display_ct_pet(folder):
     plt.show(block=False)
 
 
+def import_excel(file):
+    sheet = pd.read_excel(io=file, sheet_name='Lung-PENN').to_numpy()
+
+    temp_dict = {}
+    for i, patient in enumerate(sheet[:, 0]):
+        print(patient)
+        temp_dict[patient] = sheet[i, 1:].astype(float)
+
+    print(temp_dict['Lung-VA-136'])
+
+
+
 def main():
 
     # Processes all patients folders within the given directory
     # process_data('C:/Users/Jonathan Lee/Dropbox/Lung PET segmentation/VA PET/')
 
-    # Display the data in the given folder
+    # # Display the data in the given folder
+    # ct = np.load('processed_data/Lung-VA-001/CT.npy')
+    # pet = np.load('processed_data/Lung-VA-001/PET.npy')
+    # mask = np.load('processed_data/Lung-VA-001/mask_original.npy')
+    #
+    # final_ct, final_pet, final_mask, mask2, mask3 = cut_random_cubes(ct, pet, mask)
+    #
+    # display_ct_pet_processed(final_ct, final_pet, final_mask, 1-mask3, mask3)
 
-
-    ct = np.load('processed_data/Lung-VA-001/CT.npy')
-    pet = np.load('processed_data/Lung-VA-001/PET.npy')
-    mask = np.load('processed_data/Lung-VA-001/mask_original.npy')
-
-    final_ct, final_pet, final_mask, mask2, mask3 = cut_random_cubes(ct, pet, mask)
-
-    display_ct_pet_processed(final_ct, final_pet, final_mask, 1-mask3, mask3)
+    import_excel('Lung-PET.xlsx')
 
 
 if __name__ == "__main__":
