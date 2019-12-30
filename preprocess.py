@@ -8,9 +8,7 @@ import re
 import nrrd
 import time
 # import raster_geometry as mrt
-import threading
 import pandas as pd
-import tables
 
 
 def load_scan(path):
@@ -248,6 +246,7 @@ def normalize(image, min_bound=-1000.0, max_bound=400.0):
     image[image > 1] = 1.
     image[image < 0] = 0.
     return image
+
 
 def normalize_pet(image):
     """
@@ -509,7 +508,6 @@ def display_ct_pet_processed(input, seg, logits):
         i += 1
 
 
-
 def display_ct_pet_processed_test(input, seg, logits):
     """
     This displaces the ct, pet, tumor mask, and lung mask in 2d axial view of the tumor
@@ -547,6 +545,7 @@ def display_ct_pet_processed_test(input, seg, logits):
         time.sleep(1)
         fig.canvas.flush_events()
         i += 1
+
 
 def display_ct_pet(folder):
     """
@@ -598,7 +597,6 @@ def import_excel(file, sheet):
     return temp_dict
 
 
-
 def main():
 
     # Processes all patients folders within the given directory
@@ -614,7 +612,6 @@ def main():
     # final_ct, final_pet, final_mask, mask2, mask3 = cut_random_cubes(ct, pet, mask)
     #
     # display_ct_pet_processed(final_ct, final_pet, final_mask, 1-mask3, mask3)
-
 
 
 if __name__ == "__main__":

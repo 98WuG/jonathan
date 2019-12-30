@@ -1,14 +1,13 @@
 import tensorflow as tf
 import tensorflow_addons as tfa
 
+
 class Model(tf.keras.Model):
     def __init__(self):
         """
-        This model class will contain the architecture for your CNN that
-        classifies images. Do not modify the constructor, as doing so
-        will break the autograder. We have left in variables in the constructor
-        for you to fill out, but you are welcome to change them if you'd like.
+        This is the classifier model for the CT/PET scans
         """
+
         super(Model, self).__init__()
 
         self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.0000001)
@@ -79,10 +78,10 @@ class Model(tf.keras.Model):
 
     def call(self, image, demo):
         """
-        Runs a forward pass on an input batch of images.
-        :param inputs: images, shape of (num_inputs, 32, 32, 3); during training, the shape is (batch_size, 32, 32, 3)
-        :param is_testing: a boolean that should be set to True only when you're doing Part 2 of the assignment and this function is being called during testing
-        :return: logits - a matrix of shape (num_inputs, num_classes); during training, it would be (batch_size, 2)
+        Forward pass on the image and demographic data
+        :param image: (batch, 128, 128, 128, 2) numpy array representing CT and PET images
+        :param demo: (batch, 6) numpy array representing demographic data
+        :return: (batch, 2) numpy array representing logits
         """
 
         # Top layer
@@ -130,25 +129,22 @@ class Model(tf.keras.Model):
 
         return logits
 
-    def loss(self, y_pred, y_true):
+    def loss(self, logits, labels):
         """
         Takes in labels and logits and returns loss
-        :param y_true: labels, one-hot tensor of 1's and 0's (batch, 2)
-        :param y_pred: logits, tensor of probabilities (batch, 2)
-        :return:
+        :param logits: tensor of probabilities (batch, 2)
+        :param labels: one-hot tensor of 1's and 0's (batch, 2)
+        :return: binary crossentropy loss
         """
-        return tf.reduce_mean(tf.losses.binary_crossentropy(y_true, y_pred))
+        return tf.reduce_mean(tf.losses.binary_crossentropy(labels, logits))
 
     def accuracy(self, logits, labels):
         """
-        Calculates the model's prediction accuracy by comparing
-        logits to correct labels – no need to modify this.
-        :param logits: a matrix of size (num_inputs, self.num_classes); during training, this will be (batch_size, self.num_classes)
-        containing the result of multiple convolution and feed forward layers
-        :param labels: matrix of size (num_labels, self.num_classes) containing the answers, during training, this will be (batch_size, self.num_classes)
-        NOTE: DO NOT EDIT
-        :return: the accuracy of the model as a Tensor
-        """
+        Returns the accuracy based off of argmax
+        :param logits: tensor of probabilities (batch, 2)
+        :param labels: one-hot tensor of 1's and 0's (batch, 2) 
+        :return: accuracy
+        """""
         correct_predictions = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
         return tf.reduce_mean(tf.cast(correct_predictions, tf.float32))
 

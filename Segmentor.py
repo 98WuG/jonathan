@@ -4,10 +4,7 @@ import tensorflow_addons as tfa
 class Model(tf.keras.Model):
     def __init__(self):
         """
-        This model class will contain the architecture for your CNN that
-        classifies images. Do not modify the constructor, as doing so
-        will break the autograder. We have left in variables in the constructor
-        for you to fill out, but you are welcome to change them if you'd like.
+        This is the segmentor model for the CT/PET scans
         """
         super(Model, self).__init__()
 
@@ -121,10 +118,9 @@ class Model(tf.keras.Model):
 
     def call(self, inputs):
         """
-        Runs a forward pass on an input batch of images.
-        :param inputs: images, shape of (num_inputs, 32, 32, 3); during training, the shape is (batch_size, 32, 32, 3)
-        :param is_testing: a boolean that should be set to True only when you're doing Part 2 of the assignment and this function is being called during testing
-        :return: logits - a matrix of shape (num_inputs, num_classes); during training, it would be (batch_size, 2)
+        Forward pass on a batch of images
+        :param inputs: (batch, 128, 128, 128, 2) numpy array representing the CT and PET scans
+        :return: (batch, 128, 128, 128, 2) numpy array representing the probabilities of being a nodule or background voxel
         """
 
         # Top layer
@@ -151,7 +147,6 @@ class Model(tf.keras.Model):
 
         res41_out = tf.nn.leaky_relu(self.res41_norm(self.res41(conv4_out)))
         layer4_out = tf.nn.leaky_relu(self.res42_norm(self.res42(res41_out)) + conv4_out)
-
 
         # Fifth layer
         conv5_out = tf.nn.leaky_relu(self.conv5_norm(self.conv5(layer4_out)))
@@ -201,20 +196,20 @@ class Model(tf.keras.Model):
 
         return logits1, logits2, logits3
 
-    def loss(self, y_pred, y_true):
+    def loss(self, logits, labels):
         """
-        Takes in labels and logits and returns loss
-        :param y_true: labels, tensor of 1's and 0's (batch, x, y, z)
-        :param y_pred: logits, tensor of probabilities (batch, x, y, z, class)
+        Returns loss (testing out soft dice and binary cross-entropy)
+        :param logits: (batch, x, y, z, 2) numpy array representing the predicted probabilities
+        :param labels: (batch, x, y, z) numpy array representing the ground truth segmentation
         :return:
         """
-        # Get tumor and background labels
-        tumor_labels = y_true > 0.5
-        background_labels = y_true < 0.5
+        # Get tumor and background labels. Necessary because trilinear interpolation of mask.
+        tumor_labels = labels > 0.5
+        background_labels = labels < 0.5
 
         # Get tumor and background logits
-        tumor_logits = y_pred[:, :, :, :, 0]
-        background_logits = y_pred[:, :, :, :, 1]
+        tumor_logits = logits[:, :, :, :, 0]
+        background_logits = logits[:, :, :, :, 1]
 
         # Convert to (batch, -1) size tensors
         tumor_labels = tf.cast(tf.reshape(tumor_labels, [tf.shape(tumor_labels)[0], -1]), float)
@@ -223,15 +218,15 @@ class Model(tf.keras.Model):
         tumor_logits = tf.cast(tf.reshape(tumor_logits, [tf.shape(tumor_logits)[0], -1]), float)
         background_logits = tf.cast(tf.reshape(background_logits, [tf.shape(background_logits)[0], -1]), float)
 
-        # Calculate softdice loss
-        numerator_tumor = 2 * tf.reduce_sum(tumor_labels * tumor_logits, axis=1)
-        denominator_tumor = tf.reduce_sum(tumor_labels + tumor_logits, axis=1)
-
-        numerator_background = 2 * tf.reduce_sum(background_labels * background_logits, axis=1)
-        denominator_background = tf.reduce_sum(background_labels + background_logits, axis=1)
-
-        softdice_tumor_loss = tf.reduce_mean(1 - numerator_tumor / denominator_tumor)
-        softdice_background_loss = tf.reduce_mean(1 - numerator_background / denominator_background)
+        # # Calculate softdice loss
+        # numerator_tumor = 2 * tf.reduce_sum(tumor_labels * tumor_logits, axis=1)
+        # denominator_tumor = tf.reduce_sum(tumor_labels + tumor_logits, axis=1)
+        #
+        # numerator_background = 2 * tf.reduce_sum(background_labels * background_logits, axis=1)
+        # denominator_background = tf.reduce_sum(background_labels + background_logits, axis=1)
+        #
+        # softdice_tumor_loss = tf.reduce_mean(1 - numerator_tumor / denominator_tumor)
+        # softdice_background_loss = tf.reduce_mean(1 - numerator_background / denominator_background)
 
         # Calculate weighted binary cross-entropy
         tumor_voxels = tf.reduce_sum(tumor_labels)
@@ -246,30 +241,24 @@ class Model(tf.keras.Model):
 
 
 
-    def accuracy(self, y_pred, y_true):
+    def accuracy(self, logits, labels):
         """
-        Calculates the model's prediction accuracy by comparing
-        logits to correct labels – no need to modify this.
-        :param logits: a matrix of size (num_inputs, self.num_classes); during training, this will be (batch_size, self.num_classes)
-        containing the result of multiple convolution and feed forward layers
-        :param labels: matrix of size (num_labels, self.num_classes) containing the answers, during training, this will be (batch_size, self.num_classes)
-
-        NOTE: DO NOT EDIT
-
-        :return: the accuracy of the model as a Tensor
+        Returns the soft-dice coefficient of the batch. 1 is perfect, 0 is horrible
+        :param logits:
+        :param labels:
+        :return:
         """
         # Get tumor and background labels
-        tumor_labels = y_true >= 0.5
-
+        tumor_labels = labels >= 0.5
 
         # Get tumor and background logits
-        tumor_logits = y_pred[:, :, :, :, 0]
+        tumor_logits = logits[:, :, :, :, 0]
 
         # Convert to (batch, -1) size tensors
         tumor_labels = tf.cast(tf.reshape(tumor_labels, [tf.shape(tumor_labels)[0], -1]), float)
         tumor_logits = tf.cast(tf.reshape(tumor_logits, [tf.shape(tumor_logits)[0], -1]), float)
 
-        # Calculate softdice loss
+        # Calculate softdice coefficient
         numerator_tumor = 2 * tf.reduce_sum(tumor_labels * tumor_logits, axis=1)
         denominator_tumor = tf.reduce_sum(tumor_labels + tumor_logits, axis=1)
 
