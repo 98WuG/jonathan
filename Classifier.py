@@ -11,8 +11,8 @@ class Model(tf.keras.Model):
         """
         super(Model, self).__init__()
 
-        self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
-        self.batch_size = 2
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.0000001)
+        self.batch_size = 5
         self.checkpoint = 1
         self.hidden_size_dem = 300
         self.hidden_size_com = 500
@@ -137,7 +137,6 @@ class Model(tf.keras.Model):
         :param y_pred: logits, tensor of probabilities (batch, 2)
         :return:
         """
-
         return tf.reduce_mean(tf.losses.binary_crossentropy(y_true, y_pred))
 
     def accuracy(self, logits, labels):
@@ -147,12 +146,9 @@ class Model(tf.keras.Model):
         :param logits: a matrix of size (num_inputs, self.num_classes); during training, this will be (batch_size, self.num_classes)
         containing the result of multiple convolution and feed forward layers
         :param labels: matrix of size (num_labels, self.num_classes) containing the answers, during training, this will be (batch_size, self.num_classes)
-
         NOTE: DO NOT EDIT
-
         :return: the accuracy of the model as a Tensor
         """
         correct_predictions = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
         return tf.reduce_mean(tf.cast(correct_predictions, tf.float32))
-
 

@@ -10,6 +10,7 @@ import time
 # import raster_geometry as mrt
 import threading
 import pandas as pd
+import tables
 
 
 def load_scan(path):
@@ -23,7 +24,7 @@ def load_scan(path):
     ct_slices = [pydicom.read_file(path + '/' + s) for s in os.listdir(path) if re.match(r'.*\.dcm', s)]
 
     # Files with IM_XXX and no extension are the PET scan
-    pet_slices = [pydicom.read_file(path + '/' + s) for s in os.listdir(path) if re.match(r'IM_[0-9]+$', s)]
+    pet_slices = [pydicom.read_file(path + '/' + s) for s in os.listdir(path) if re.match(r'PET*', s)]
 
     # Sort them so it's in order
     ct_slices.sort(key=lambda x: float(x.ImagePositionPatient[2]))
@@ -43,8 +44,8 @@ def load_scan(path):
             ct_slice_thickness = np.abs(pet_slices[0].SliceLocation - pet_slices[1].SliceLocation)
             pet_slice_thickness = np.abs(pet_slices[0].SliceLocation - pet_slices[1].SliceLocation)
     except:
-        ct_slice_thickness = ct_slices[0][0x18, 0x88].value
-        pet_slice_thickness = pet_slices[0][0x18, 0x88].value
+        ct_slice_thickness = ct_slices[0][0x18, 0x50].value
+        pet_slice_thickness = pet_slices[0][0x18, 0x50].value
 
     # Make sure they remember their z-axis spacing
     for s in ct_slices:
@@ -128,6 +129,7 @@ def resample_mask(image, new_spacing=[1, 1, 1]):
     :return: resampled image
     """
     # Determine current pixel spacing
+    new_spacing = [new_spacing[0, 0], new_spacing[1, 1], new_spacing[2, 2]]
     spacing = np.array([1, 1, 1], dtype=np.float32)
 
     # How much we need to scale each dimension
@@ -290,8 +292,6 @@ def load_image(path):
     # Resampling the image
     print('Resampling mask...')
     tumor_resampled_mask1, spacing = resample_mask(tumor_mask[0], tumor_mask[1]['space directions'])
-    tumor_resampled_mask2, spacing = resample_mask(tumor_mask[0], tumor_mask[1]['space directions'], [2, 2, 2])
-    tumor_resampled_mask3, spacing = resample_mask(tumor_mask[0], tumor_mask[1]['space directions'], [4, 4, 4])
     print('Resampling CT...')
     ct_resampled_image, spacing = resample(ct_pixel, ct_data, [1, 1, 1])
     print('Resampling PET...')
@@ -299,17 +299,15 @@ def load_image(path):
 
     # Rotate the mask
     tumor_resampled_mask1 = np.transpose(tumor_resampled_mask1, [2, 1, 0])
-    tumor_resampled_mask2 = np.transpose(tumor_resampled_mask2, [2, 1, 0])
-    tumor_resampled_mask3 = np.transpose(tumor_resampled_mask3, [2, 1, 0])
 
     # # Get the lung mask
     # print('Generating lung mask...')
     # lung_mask = segment_lung_mask(ct_resampled_image[:-200], True)
 
-    return ct_resampled_image, pet_resampled_image, tumor_resampled_mask1, tumor_resampled_mask2, tumor_resampled_mask3
+    return ct_resampled_image, pet_resampled_image, tumor_resampled_mask1
 
 
-def process_data(parent_directory):
+def process_data(parent_directory, save_directory):
     """
     This takes a parent directory and processes all the patients, as folders, within it
     :param parent_directory:
@@ -329,20 +327,16 @@ def process_data(parent_directory):
         start_time1 = time.time()
 
         # Load the image of the given patient
-        ct, pet, mask1, mask2, mask3 = load_image(parent_directory + "/" + patient)
+        ct, pet, mask = load_image(parent_directory + "/" + patient)
 
         # Create a directory if it doesn't exist
-        if not os.path.exists('processed_data/' + patient):
-            os.makedirs('processed_data/' + patient)
+        if not os.path.exists(save_directory + '/' + patient):
+            os.makedirs(save_directory + '/' + patient)
 
         # Save as numpy arrays
-        np.save('processed_data/' + patient + "/PET", pet)
-        np.save('processed_data/' + patient + "/CT", ct)
-        np.save('processed_data/' + patient + "/mask_original", mask1)
-        np.save('processed_data/' + patient + "/mask_half", mask2)
-        np.save('processed_data/' + patient + "/mask_quarter", mask3)
-
-        # np.save('processed_data/' + patient + "/lung", lung)
+        np.save(save_directory + '/' + patient + "/PET", pet)
+        np.save(save_directory + '/' + patient + "/CT", ct)
+        np.save(save_directory + '/' + patient + "/mask", mask)
 
         # Print time
         print("--- Patient data loaded in %s seconds ---" % (time.time() - start_time1))
@@ -428,6 +422,43 @@ def cut_random_cubes(ct, pet, mask):
     mask3, spacing = resample_mask(final_mask, [4, 4, 4])
 
     return final_ct, final_pet, final_mask, mask2, mask3, nodule
+
+
+def cut_cubes_mask(ct, pet, mask):
+    """
+    This cuts random 128x128x128 cubes that include the tumor
+    :param ct: full ct scan
+    :param pet: full pet scan
+    :param mask: full mask
+    :return: images (128, 128, 128, 2), mask (128, 128, 128), mask(64,64,64), mask(32,32,32)
+    """
+
+    # Make the pet scan the same size as the other scans
+    difference = int((pet.shape[1] - ct.shape[1]) / 2)
+    pet = pet[:, difference:-difference, difference:-difference]
+
+    # Get the high and low indices of the mask and turn into numpy arrays
+    low, high = get_mask_bounds(mask)
+    low = np.array(low)
+    high = np.array(high)
+    difference = high - low
+    center = (high + low)/2
+
+    # Check if the tumor can be put inside with padding of at least 12
+    if np.any(difference > 30):
+        print('Tumor too big')
+        nodule = False
+    else:
+        nodule = True
+
+    # Subtract 64 from the center
+    final_index = (center - 64).astype(int)
+
+    # Use the index to find the resulting cubes
+    final_ct = ct[final_index[0]:final_index[0]+128, final_index[1]:final_index[1]+128, final_index[2]:final_index[2]+128]
+    final_pet = pet[final_index[0]:final_index[0]+128, final_index[1]:final_index[1]+128, final_index[2]:final_index[2]+128]
+
+    return final_ct, final_pet, nodule
 
 
 def display_ct_pet_processed(input, seg, logits):
@@ -554,33 +585,36 @@ def display_ct_pet(folder):
     plt.show(block=False)
 
 
-def import_excel(file):
-    sheet = pd.read_excel(io=file, sheet_name='Lung-PENN').to_numpy()
+def import_excel(file, sheet):
+    sheet = pd.read_excel(io=file, sheet_name=sheet).to_numpy()
 
     temp_dict = {}
     for i, patient in enumerate(sheet[:, 0]):
-        print(patient)
+        # print(patient)
         temp_dict[patient] = sheet[i, 1:].astype(float)
 
-    print(temp_dict['Lung-VA-136'])
+    # print(temp_dict['Lung-VA-136'])
+
+    return temp_dict
 
 
 
 def main():
 
     # Processes all patients folders within the given directory
-    # process_data('C:/Users/Jonathan Lee/Dropbox/Lung PET segmentation/VA PET/')
+    process_data('/media/user1/My4TBHD1/Lung/Lung PET segmentation/PENN PET', '/media/user1/My4TBHD1/Lung/processed_data')
 
-    # # Display the data in the given folder
-    # ct = np.load('processed_data/Lung-VA-001/CT.npy')
-    # pet = np.load('processed_data/Lung-VA-001/PET.npy')
-    # mask = np.load('processed_data/Lung-VA-001/mask_original.npy')
+    # Display the data in the given folder
+    # ct = np.load('processed_data/Lung-VA-002/CT.npy')
+    # pet = np.load('processed_data/Lung-VA-002/PET.npy')
+    # mask = np.load('processed_data/Lung-VA-002/mask_original.npy')
     #
+    # f_ct, f_pet, nodule = cut_cubes_mask(ct, pet, mask)
+
     # final_ct, final_pet, final_mask, mask2, mask3 = cut_random_cubes(ct, pet, mask)
     #
     # display_ct_pet_processed(final_ct, final_pet, final_mask, 1-mask3, mask3)
 
-    import_excel('Lung-PET.xlsx')
 
 
 if __name__ == "__main__":
