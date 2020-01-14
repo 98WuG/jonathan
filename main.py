@@ -8,6 +8,7 @@ import math
 import Segmentor
 import matplotlib.pyplot as plt
 import Classifier
+import traceback
 
 
 def train_seg(model, folder, manager, start, save_dir):
@@ -53,11 +54,12 @@ def train_seg(model, folder, manager, start, save_dir):
                 # Load their scans
                 ct = np.load(folder + '/' + patient + '/CT.npy').astype(float)
                 pet = np.load(folder + '/' + patient + '/PET.npy').astype(float)
-                mask = np.load(folder + '/' + patient + '/mask_original.npy').astype(float)
+                mask = np.load(folder + '/' + patient + '/mask.npy').astype(float)
+                print(ct.shape, pet.shape,  mask.shape)
 
                 # Cut the random cubes
                 ct_final, pet_final, mask_final, half_mask, quarter_mask, nodule = cut_random_cubes(ct, pet, mask)
-
+                print(ct_final.shape, pet_final.shape, mask_final.shape)
                 if nodule:
                     # Put the ct and pet into channels and append to the outside list
                     inputs.append(np.transpose([(normalize(ct_final)), normalize_pet(pet_final)], [1, 2, 3, 0]))
@@ -79,7 +81,8 @@ def train_seg(model, folder, manager, start, save_dir):
 
             print('Input shape: ', inputs.shape)
 
-        except:
+        except Exception as err:
+            traceback.print_exc()
             print('Error loading patient data!')
             continue
 
@@ -92,6 +95,7 @@ def train_seg(model, folder, manager, start, save_dir):
             # print(inputs.shape)
             # print(labels.shape)
             logits1, logits2, logits3 = model.call(inputs)
+            print(logits1.shape, logits2.shape, logits3.shape)
             loss = (model.loss(logits1, labels3)/4) + (model.loss(logits2, labels2)/2) + model.loss(logits3, labels1)
 
             # print accuracy
@@ -178,21 +182,34 @@ def train_class(model, folder, demo_data, manager, start, save_dir):
                 # Load their scans
                 ct = np.load(folder + '/' + patient + '/CT.npy').astype(float)
                 pet = np.load(folder + '/' + patient + '/PET.npy').astype(float)
-                mask = np.load(folder + '/' + patient + '/mask_original.npy').astype(float)
+                mask = np.load(folder + '/' + patient + '/mask.npy').astype(float)
 
                 # Cut the random cubes
-                ct_final, pet_final, nodule = cut_cubes_mask(ct, pet, mask)
+                try:
+                    ct_final, pet_final, nodule = cut_cubes_mask(ct, pet, mask)
+                except Exception as e:
+                    traceback.print_exc()
+                    added_index += 1
+                    print('Error loading patient data!')
+                    continue
+
+                print("Cube sizes: ", ct_final.shape, pet_final.shape, nodule, (j+1), '/', model.batch_size)
 
                 # If it's a nodule, add it, otherwise, move to next patient
-                if nodule:
+                if nodule and ct_final.shape == (128, 128, 128) and pet_final.shape == (128, 128, 128):
 
                     # Put the ct and pet into channels and append to the outside list
-                    image_inputs.append(np.transpose([(normalize(ct_final)), normalize_pet(pet_final)], [1, 2, 3, 0]))
+                    try:
+                        image_inputs.append(np.transpose([(normalize(ct_final)), normalize_pet(pet_final)], [1, 2, 3, 0]))
 
-                    # Get their demographic information
-                    demo_inputs.append(demo_data[patient][:6])
-                    labels.append(demo_data[patient][-1])
-                    j += 1
+                        # Get their demographic information
+                        demo_inputs.append(demo_data[patient.lower()][:6])
+                        labels.append(demo_data[patient.lower()][-1])
+                        j += 1
+                    except Exception as e:
+                        traceback.print_exc()
+                        added_index += 1
+                        continue
 
                 else:
 
@@ -208,12 +225,10 @@ def train_class(model, folder, demo_data, manager, start, save_dir):
             labels = b
             print('Image shape: ', image_inputs.shape)
             print('Demo shape: ', demo_inputs.shape)
-            print(demo_inputs)
             print('Labels shape: ', labels.shape)
-            print(labels)
 
         except Exception as e:
-            print(e)
+            traceback.print_exc()
             print('Error loading patient data!')
             continue
 
@@ -354,9 +369,9 @@ def main():
     # Get the date and time in a string
     now = datetime.now()
     if choose:
-        mod_str = 'classifier'
+        mod_str = '_classifier'
     else:
-        mod_str = 'segmentor'
+        mod_str = '_segmentor'
     dt_string = now.strftime("%d.%m.%Y_%H.%M") + mod_str
     checkpoint_dir = dt_string
     checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
@@ -373,11 +388,11 @@ def main():
 
     # Train it
     if choose:
-        train_class(model, './processed_data', import_excel('./Lung-PET.xlsx', 'Lung-PENN'), manager, 0, checkpoint_dir)
+        train_class(model, '/media/user1/My4TBHD1/Lung/processed_data', import_excel('./Lung-PET.xlsx', 'Lung-PENN'), manager, 0, checkpoint_dir)
     else:
-        train_seg(model, './processed_data', manager, 0, checkpoint_dir)
+        train_seg(model, '/media/user1/My4TBHD1/Lung/processed_data', manager, 0, checkpoint_dir)
         for i in range(10):
-            train_seg(model, './processed_data', manager, 0, checkpoint_dir)
+            train_seg(model, '/media/user1/My4TBHD1/Lung/processed_data', manager, 0, checkpoint_dir)
         manager.save()
 
     # Graph loss

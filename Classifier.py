@@ -10,11 +10,11 @@ class Model(tf.keras.Model):
 
         super(Model, self).__init__()
 
-        self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.0000001)
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.00001)
         self.batch_size = 5
         self.checkpoint = 1
-        self.hidden_size_dem = 300
-        self.hidden_size_com = 500
+        self.hidden_size_dem = 500
+        self.hidden_size_com = 750
 
         # First convolution layer, relu, and normalization
         self.conv1 = tf.keras.layers.Conv3D(21, 3, padding='same')

@@ -203,6 +203,7 @@ class Model(tf.keras.Model):
         :param labels: (batch, x, y, z) numpy array representing the ground truth segmentation
         :return:
         """
+        print(logits.shape, labels.shape)
         # Get tumor and background labels. Necessary because trilinear interpolation of mask.
         tumor_labels = labels > 0.5
         background_labels = labels < 0.5
